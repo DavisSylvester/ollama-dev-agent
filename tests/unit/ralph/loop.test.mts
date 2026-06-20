@@ -53,10 +53,14 @@ let loop: RalphLoop;
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'ralph-test-'));
+  // Redirect the global knowledge base to a temp dir so tests never write to
+  // the real repo KB.
+  process.env['ODA_KB_DIR'] = join(tmpDir, 'kb');
   loop = new RalphLoop(tmpDir, 'my-feature', 'My Feature', 3);
 });
 
 afterEach(async () => {
+  delete process.env['ODA_KB_DIR'];
   await rm(tmpDir, { recursive: true, force: true });
 });
 

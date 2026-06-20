@@ -100,9 +100,13 @@ export function buildWorkerPrompt(
   activityLog: string = '',
   directoryListing: string = '',
   availablePackages: string = '',
+  knowledgeBase: string = '',
 ): string {
   const stepBudget = env.MAX_REACT_STEPS;
   const explorationBudget = Math.min(3, Math.floor(stepBudget * 0.15));
+
+  const knowledgeBaseSection =
+    knowledgeBase.trim().length > 0 ? `\n${knowledgeBase}\n` : '';
 
   const feedbackSection =
     iteration > 1 && reviewerFeedback.trim().length > 0
@@ -189,7 +193,7 @@ ${iterationHint}${activitySection}${directorySection}${availablePackagesSection}
 **Description**: ${task.description}
 **Acceptance Criteria**: ${task.acceptanceCriteria}
 **Test Command**: \`${task.testCommand}\`
-${feedbackSection}
+${feedbackSection}${knowledgeBaseSection}
 ## Step Budget
 
 You have a hard limit of **${stepBudget} steps** for this task. Spend them wisely:

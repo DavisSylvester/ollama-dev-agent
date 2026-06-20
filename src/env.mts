@@ -7,7 +7,7 @@ const envSchema = z.object({
   PLANNER_MODEL: z.string().default('qwen3.5:35b'),
   CODER_MODEL: z.string().default('qwen3-coder:30b'),
   EDITOR_MODEL: z.string().default('devstral-small-2'),
-  MAX_ITERATIONS: z.coerce.number().int().min(1).max(20).default(5),
+  MAX_ITERATIONS: z.coerce.number().int().min(1).max(50).default(30),
   MAX_REACT_STEPS: z.coerce.number().int().min(5).max(100).default(20),
   REVIEWER_MAX_STEPS: z.coerce.number().int().min(3).max(20).default(8),
   PLANNER_MAX_STEPS: z.coerce.number().int().min(5).max(50).default(15),

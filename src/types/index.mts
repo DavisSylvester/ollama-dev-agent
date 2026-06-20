@@ -15,3 +15,9 @@ export type {
   DirectoryEntry,
   GrepMatch,
 } from './tools.mts';
+export type {
+  KBCategory,
+  KBMetadata,
+  KBEntry,
+  KnowledgeBase,
+} from './knowledge-base.mts';

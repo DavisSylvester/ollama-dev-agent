@@ -5,6 +5,7 @@ import { runWorker } from './worker.mts';
 import { runReviewer } from './reviewer.mts';
 import { runLint, type LintResult } from '../tools/run-linter.mts';
 import { REACT_TIMEOUT_SENTINEL } from '../models/react-agent.mts';
+import { appendEntry, categorizeTask } from '../knowledge-base/index.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 import { DateTime } from 'luxon';
@@ -58,6 +59,10 @@ export class RalphLoop {
     }
 
     task.status = 'in_progress';
+
+    // Issues accumulated across iterations — logged to the knowledge base on
+    // SHIP (as resolved) or on failure (as unresolved) so future runs learn.
+    const kbIssues: string[] = [];
 
     for (let iteration = 1; iteration <= this.maxIterations; iteration++) {
       logger.info(
@@ -172,6 +177,7 @@ export class RalphLoop {
           // Non-fatal
         }
 
+        kbIssues.push(`Iteration ${iteration}: worker timed out (exhausted ${env.MAX_REACT_STEPS}-step budget)`);
         task.iterationCount = iteration;
         // Loop to next iteration — reviewer is skipped entirely.
         continue;
@@ -221,6 +227,7 @@ export class RalphLoop {
           // Non-fatal
         }
 
+        kbIssues.push(`Iteration ${iteration}: lint failed — ${firstLine(lintResult.output)}`);
         task.iterationCount = iteration;
         // Loop to next iteration — reviewer is skipped entirely.
         continue;
@@ -274,6 +281,7 @@ export class RalphLoop {
         } catch {
           // Non-fatal
         }
+        kbIssues.push(`Iteration ${iteration}: reviewer REVISE — ${decision.issues.join('; ') || decision.feedback}`);
       }
 
       task.iterationCount = iteration;
@@ -285,6 +293,10 @@ export class RalphLoop {
           // Non-fatal
         }
         logger.info({ taskId: task.id, iteration }, 'ralph.task_complete');
+        // Record the resolved issues so future runs benefit from how we fixed them.
+        if (kbIssues.length > 0) {
+          await this.logKnowledge(task, kbIssues, `Resolved after ${iteration} iteration(s) and shipped.`, iteration);
+        }
         task.status = 'complete';
         return 'complete';
       }
@@ -296,8 +308,38 @@ export class RalphLoop {
       { taskId: task.id, maxIterations: this.maxIterations },
       'ralph.task_failed: max iterations exhausted',
     );
+    // Record the unresolved failure so future runs know this is a hard problem.
+    await this.logKnowledge(
+      task,
+      kbIssues,
+      `UNRESOLVED — hit the ${this.maxIterations}-iteration cap without shipping.`,
+      this.maxIterations,
+    );
     task.status = 'failed';
     return 'failed';
+  }
+
+  // Append a learned issue → resolution record to the global knowledge base.
+  private async logKnowledge(
+    task: Task,
+    issues: string[],
+    resolution: string,
+    iterations: number,
+  ): Promise<void> {
+    const issue = issues.length > 0 ? issues.join('\n') : 'No specific issues recorded.';
+    await appendEntry(categorizeTask(task), {
+      issue,
+      prompt: `${task.name}: ${task.description}`,
+      model: env.CODER_MODEL,
+      resolution,
+      metadata: {
+        taskId: task.id,
+        iterations,
+        status: resolution.startsWith('UNRESOLVED') ? 'failed' : 'complete',
+        timestamp: DateTime.utc().toISO() ?? '',
+        featureSlug: this.featureSlug,
+      },
+    });
   }
 }
 
@@ -324,6 +366,12 @@ function extractChangedFiles(log: ToolCallEntry[]): string[] {
     }
   }
   return [...files];
+}
+
+// First non-empty line of multi-line tool output, trimmed for KB summaries.
+function firstLine(text: string): string {
+  const line = text.split('\n').map((l) => l.trim()).find((l) => l.length > 0);
+  return (line ?? text).slice(0, 200);
 }
 
 function formatDuration(ms: number): string {
