@@ -527,6 +527,53 @@ describe('RalphLoop.runTask — lint gate', () => {
     expect(fixFlags).toEqual([true, false]);
   });
 
+  it('logs an anti-pattern entry when the worker loops on run_tests in one iteration', async () => {
+    const task = makeTask();
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+
+    const deps: RalphRunnerDeps = {
+      workerFn: async (params) => {
+        // Simulate the worker re-running tests 4 times in a single iteration.
+        for (let i = 0; i < 4; i++) params.onToolCall?.('run_tests', {});
+        params.onToolCall?.('write_file', { path: 'src/x.mts', content: 'x' });
+        return 'output';
+      },
+      reviewerFn: async () => makeShipDecision(),
+      lintFn: async () => ({ clean: true, output: 'clean' }),
+    };
+
+    await loop.runTask(task, NO_TOOLS, undefined, deps);
+
+    // ODA_KB_DIR was redirected to tmpDir/kb in beforeEach.
+    const apiKb = await readFile(join(process.env['ODA_KB_DIR']!, 'api.json'), 'utf-8');
+    expect(apiKb).toContain('run_tests');
+    expect(apiKb).toContain('anti-pattern');
+  });
+
+  it('flushes a lint issue to the knowledge base immediately (not only at task end)', async () => {
+    const task = makeTask();
+    let workerCalls = 0;
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+
+    const deps: RalphRunnerDeps = {
+      workerFn: async () => { workerCalls++; return 'output'; },
+      reviewerFn: async () => makeShipDecision(),
+      // Fail lint on iteration 1 (logged immediately), pass on iteration 2.
+      lintFn: async () =>
+        workerCalls === 1
+          ? { clean: false, output: "src/foo.mts  1:1  error  'x' is unused" }
+          : { clean: true, output: 'clean' },
+    };
+
+    await loop.runTask(task, NO_TOOLS, undefined, deps);
+
+    const apiKb = JSON.parse(await readFile(join(process.env['ODA_KB_DIR']!, 'api.json'), 'utf-8')) as Array<{ metadata: { status?: string } }>;
+    // At least one entry logged during the run with the 'lint' status.
+    expect(apiKb.some((e) => e.metadata.status === 'lint')).toBe(true);
+  });
+
   it('fires onLintComplete with the lint result', async () => {
     const task = makeTask();
     const lintEvents: Array<{ clean: boolean; output: string }> = [];

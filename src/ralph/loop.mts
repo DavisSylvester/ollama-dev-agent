@@ -60,9 +60,9 @@ export class RalphLoop {
 
     task.status = 'in_progress';
 
-    // Issues accumulated across iterations — logged to the knowledge base on
-    // SHIP (as resolved) or on failure (as unresolved) so future runs learn.
-    const kbIssues: string[] = [];
+    // Count of issues logged across iterations so we can record a final
+    // "resolved" marker on SHIP only when the task actually struggled.
+    let issuesLogged = 0;
 
     for (let iteration = 1; iteration <= this.maxIterations; iteration++) {
       logger.info(
@@ -139,6 +139,16 @@ export class RalphLoop {
         // Non-fatal: continue even if we can't persist
       }
 
+      // --- Anti-pattern detection ---
+      // Catch inefficient tool loops within a single iteration (e.g. re-running
+      // run_tests repeatedly without converging) and log them to the KB so the
+      // worker learns to break the loop next time.
+      for (const thrash of detectToolThrash(toolCallLog)) {
+        logger.warn({ taskId: task.id, iteration, thrash }, 'ralph.tool_thrash');
+        await this.logIssue(task, thrash.issue, thrash.resolution, iteration, 'anti-pattern');
+        issuesLogged++;
+      }
+
       // --- Sentinel detection ---
       // If the worker exhausted its step budget, skip the reviewer and force
       // another iteration with targeted feedback. The worker may have left files
@@ -177,7 +187,14 @@ export class RalphLoop {
           // Non-fatal
         }
 
-        kbIssues.push(`Iteration ${iteration}: worker timed out (exhausted ${env.MAX_REACT_STEPS}-step budget)`);
+        await this.logIssue(
+          task,
+          `Worker timed out on iteration ${iteration} (exhausted ${env.MAX_REACT_STEPS}-step budget)`,
+          'Break the work into fewer, larger writes. Write all files immediately after a minimal survey, then run the test command once. Do not re-explore or re-read files.',
+          iteration,
+          'timeout',
+        );
+        issuesLogged++;
         task.iterationCount = iteration;
         // Loop to next iteration — reviewer is skipped entirely.
         continue;
@@ -227,7 +244,14 @@ export class RalphLoop {
           // Non-fatal
         }
 
-        kbIssues.push(`Iteration ${iteration}: lint failed — ${firstLine(lintResult.output)}`);
+        await this.logIssue(
+          task,
+          `Lint failed on iteration ${iteration} — ${firstLine(lintResult.output)}`,
+          `Fix the ESLint violations:\n${lintResult.output.slice(0, 600)}`,
+          iteration,
+          'lint',
+        );
+        issuesLogged++;
         task.iterationCount = iteration;
         // Loop to next iteration — reviewer is skipped entirely.
         continue;
@@ -281,7 +305,14 @@ export class RalphLoop {
         } catch {
           // Non-fatal
         }
-        kbIssues.push(`Iteration ${iteration}: reviewer REVISE — ${decision.issues.join('; ') || decision.feedback}`);
+        await this.logIssue(
+          task,
+          `Reviewer requested changes on iteration ${iteration}`,
+          decision.issues.length > 0 ? decision.issues.join('\n') : decision.feedback,
+          iteration,
+          'revise',
+        );
+        issuesLogged++;
       }
 
       task.iterationCount = iteration;
@@ -293,9 +324,15 @@ export class RalphLoop {
           // Non-fatal
         }
         logger.info({ taskId: task.id, iteration }, 'ralph.task_complete');
-        // Record the resolved issues so future runs benefit from how we fixed them.
-        if (kbIssues.length > 0) {
-          await this.logKnowledge(task, kbIssues, `Resolved after ${iteration} iteration(s) and shipped.`, iteration);
+        // Record a resolved marker so future runs see this was overcome.
+        if (issuesLogged > 0) {
+          await this.logIssue(
+            task,
+            `Task had ${issuesLogged} issue(s) but was completed`,
+            `Resolved after ${iteration} iteration(s) and shipped.`,
+            iteration,
+            'resolved',
+          );
         }
         task.status = 'complete';
         return 'complete';
@@ -309,24 +346,26 @@ export class RalphLoop {
       'ralph.task_failed: max iterations exhausted',
     );
     // Record the unresolved failure so future runs know this is a hard problem.
-    await this.logKnowledge(
+    await this.logIssue(
       task,
-      kbIssues,
-      `UNRESOLVED — hit the ${this.maxIterations}-iteration cap without shipping.`,
+      `Task failed: hit the ${this.maxIterations}-iteration cap without shipping`,
+      'UNRESOLVED — exceeded max iterations. Consider a larger ReAct step budget (--max-react-steps) or splitting the task.',
       this.maxIterations,
+      'failed',
     );
     task.status = 'failed';
     return 'failed';
   }
 
-  // Append a learned issue → resolution record to the global knowledge base.
-  private async logKnowledge(
+  // Append ONE issue → resolution record to the global knowledge base, flushed
+  // immediately so nothing is lost on long or interrupted runs.
+  private async logIssue(
     task: Task,
-    issues: string[],
+    issue: string,
     resolution: string,
-    iterations: number,
+    iteration: number,
+    status: string,
   ): Promise<void> {
-    const issue = issues.length > 0 ? issues.join('\n') : 'No specific issues recorded.';
     await appendEntry(categorizeTask(task), {
       issue,
       prompt: `${task.name}: ${task.description}`,
@@ -334,8 +373,8 @@ export class RalphLoop {
       resolution,
       metadata: {
         taskId: task.id,
-        iterations,
-        status: resolution.startsWith('UNRESOLVED') ? 'failed' : 'complete',
+        iterations: iteration,
+        status,
         timestamp: DateTime.utc().toISO() ?? '',
         featureSlug: this.featureSlug,
       },
@@ -372,6 +411,52 @@ function extractChangedFiles(log: ToolCallEntry[]): string[] {
 function firstLine(text: string): string {
   const line = text.split('\n').map((l) => l.trim()).find((l) => l.length > 0);
   return (line ?? text).slice(0, 200);
+}
+
+interface ThrashIssue {
+  readonly issue: string;
+  readonly resolution: string;
+}
+
+// Per-tool thresholds above which repeated calls in ONE iteration signal the
+// worker is looping (re-running/re-reading) rather than converging. write_file
+// and edit_file are excluded — writing many files in one pass is legitimate.
+const THRASH_THRESHOLDS: Record<string, number> = {
+  run_tests: 4,
+  run_linter: 4,
+  read_file: 8,
+  list_directory: 4,
+  glob_search: 5,
+  grep_search: 5,
+  shell_exec: 6,
+};
+
+const THRASH_GUIDANCE: Record<string, string> = {
+  run_tests: 'Make one targeted fix based on the failure, then run the test command once. Do not re-run tests to re-read the same failure.',
+  run_linter: 'Fix all reported violations in one pass, then run the linter once to confirm.',
+  read_file: 'You already have these files in context — use them from memory instead of re-reading.',
+  list_directory: 'The directory structure is already known — stop listing and start writing.',
+};
+
+// Detect tool-call loops within a single iteration's tool log.
+function detectToolThrash(log: ToolCallEntry[]): ThrashIssue[] {
+  const counts = new Map<string, number>();
+  for (const entry of log) {
+    counts.set(entry.toolName, (counts.get(entry.toolName) ?? 0) + 1);
+  }
+  const issues: ThrashIssue[] = [];
+  for (const [tool, count] of counts) {
+    const threshold = THRASH_THRESHOLDS[tool];
+    if (threshold !== undefined && count >= threshold) {
+      issues.push({
+        issue: `Worker called ${tool} ${count} times in a single iteration without converging`,
+        resolution:
+          THRASH_GUIDANCE[tool] ??
+          `Avoid calling ${tool} repeatedly in one iteration — make a decision and move on.`,
+      });
+    }
+  }
+  return issues;
 }
 
 function formatDuration(ms: number): string {
