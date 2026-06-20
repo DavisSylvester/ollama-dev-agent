@@ -2,7 +2,15 @@ import { ChatOllama } from '@langchain/ollama';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 
+// Bearer auth header for Ollama Cloud. Returns undefined for local Ollama
+// (no key set) so behavior is unchanged when running locally.
+function authHeaders(): Headers | undefined {
+  if (!env.OLLAMA_API_KEY) return undefined;
+  return new Headers({ Authorization: `Bearer ${env.OLLAMA_API_KEY}` });
+}
+
 export function createChatModel(model: string): ChatOllama {
+  const headers = authHeaders();
   return new ChatOllama({
     baseUrl: env.OLLAMA_BASE_URL,
     model,
@@ -11,6 +19,7 @@ export function createChatModel(model: string): ChatOllama {
     // Keep the HTTP connection alive to avoid socket-reset errors on long
     // generation runs. -1 means keep loaded indefinitely in Ollama.
     keepAlive: '-1m',
+    ...(headers ? { headers } : {}),
   });
 }
 
@@ -18,7 +27,11 @@ const CODER_FALLBACKS = ['qwen3-coder:30b', 'devstral-small-2:24b', 'deepseek-r1
 
 async function fetchAvailableModels(): Promise<Set<string>> {
   try {
-    const response = await fetch(`${env.OLLAMA_BASE_URL}/api/tags`);
+    const headers = authHeaders();
+    const response = await fetch(
+      `${env.OLLAMA_BASE_URL}/api/tags`,
+      headers ? { headers } : undefined,
+    );
     if (!response.ok) return new Set();
     const data = (await response.json()) as { models?: Array<{ name: string }> };
     const names = new Set<string>();

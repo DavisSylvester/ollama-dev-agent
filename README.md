@@ -355,7 +355,8 @@ All validated at startup with Zod via `src/env.mts`. Never access `Bun.env` dire
 
 | Variable | Default | Description |
 |---|---|---|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint — `https://ollama.com` for Ollama Cloud |
+| `OLLAMA_API_KEY` | — | Bearer token for Ollama Cloud; leave blank for local Ollama |
 | `PLANNER_MODEL` | `qwen3.5:35b` | Model for PRD generation |
 | `CODER_MODEL` | `qwen3-coder:30b` | Worker model |
 | `EDITOR_MODEL` | `devstral-small-2` | Reviewer model |
@@ -367,6 +368,28 @@ All validated at startup with Zod via `src/env.mts`. Never access `Bun.env` dire
 | `BRAVE_API_KEY` | — | Optional, for Brave Search (planner + worker) |
 | `LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
 | `LOG_FILE` | `.oda.log` | Log output file |
+
+### Running against Ollama Cloud
+
+The agent works against [Ollama Cloud](https://ollama.com) without code changes — point it at
+the cloud endpoint and supply an API key:
+
+```bash
+# .env
+OLLAMA_BASE_URL=https://ollama.com
+OLLAMA_API_KEY=<your key from https://ollama.com/settings/keys>
+```
+
+When `OLLAMA_API_KEY` is set, every model call and the model-availability probe send an
+`Authorization: Bearer <key>` header. With no key set, behavior is identical to local Ollama.
+
+Cloud model names differ from local tags — list what your account can access and set
+`PLANNER_MODEL` / `CODER_MODEL` / `EDITOR_MODEL` accordingly:
+
+```bash
+curl -s https://ollama.com/api/tags -H "Authorization: Bearer $OLLAMA_API_KEY" \
+  | jq -r '.models[].name'
+```
 
 ---
 

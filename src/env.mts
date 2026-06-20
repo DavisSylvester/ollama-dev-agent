@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 const envSchema = z.object({
   OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),
+  // Set when targeting Ollama Cloud (https://ollama.com). Sent as a Bearer token.
+  OLLAMA_API_KEY: z.string().optional(),
   PLANNER_MODEL: z.string().default('qwen3.5:35b'),
   CODER_MODEL: z.string().default('qwen3-coder:30b'),
   EDITOR_MODEL: z.string().default('devstral-small-2'),
