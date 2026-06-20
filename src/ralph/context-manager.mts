@@ -70,6 +70,24 @@ export class ContextManager {
     await writeFile(join(dir, `reviewer-${iteration}.md`), feedback, 'utf-8');
   }
 
+  // Persist the reviewer's per-criterion pre-completion checklist for the task.
+  async saveChecklist(
+    taskId: string,
+    iteration: number,
+    items: ReadonlyArray<{ criterion: string; met: boolean }>,
+  ): Promise<void> {
+    if (items.length === 0) return;
+    const dir = this.taskDir(taskId);
+    await mkdir(dir, { recursive: true });
+    const lines = [
+      `# Pre-Completion Checklist — ${taskId} (iteration ${iteration})`,
+      ``,
+      ...items.map((i) => `- [${i.met ? 'x' : ' '}] ${i.criterion}`),
+      ``,
+    ];
+    await writeFile(join(dir, 'checklist.md'), lines.join('\n'), 'utf-8');
+  }
+
   async saveActivityEntry(taskId: string, entry: string): Promise<void> {
     const dir = this.taskDir(taskId);
     await mkdir(dir, { recursive: true });

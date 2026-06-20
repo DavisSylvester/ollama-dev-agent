@@ -1,4 +1,4 @@
-import type { Task, ReviewDecision } from '../types/index.mts';
+import type { Task, ReviewDecision, ChecklistItem } from '../types/index.mts';
 import { createChatModel } from '../models/index.mts';
 import { SystemMessage, HumanMessage, type AIMessage } from '@langchain/core/messages';
 import { buildReviewerPrompt } from '../prd/index.mts';
@@ -182,13 +182,27 @@ function extractContent(aiMessage: AIMessage): string {
 
 // Exported for unit testing
 export function parseReviewDecision(response: string): ReviewDecision {
+  const checklist = parseChecklist(response);
+  const unmet = checklist.filter((c) => !c.met);
+
   if (/DECISION:\s*SHIP/i.test(response)) {
-    return { decision: 'ship', feedback: response, issues: [] };
+    // Pre-completion gate: a SHIP is only valid if every acceptance criterion
+    // in the checklist is met. If the reviewer marked SHIP but left criteria
+    // unchecked, override to REVISE with the unmet criteria as issues.
+    if (unmet.length > 0) {
+      return {
+        decision: 'revise',
+        feedback: response,
+        issues: unmet.map((c) => `Acceptance criterion not met: ${c.criterion}`),
+        checklist,
+      };
+    }
+    return { decision: 'ship', feedback: response, issues: [], checklist };
   }
 
   if (/DECISION:\s*REVISE/i.test(response)) {
     const issues = extractIssues(response);
-    return { decision: 'revise', feedback: response, issues };
+    return { decision: 'revise', feedback: response, issues, checklist };
   }
 
   // Fallback: no explicit decision found
@@ -196,7 +210,23 @@ export function parseReviewDecision(response: string): ReviewDecision {
     decision: 'revise',
     feedback: response,
     issues: ['Reviewer did not provide an explicit DECISION. Full response attached as feedback.'],
+    checklist,
   };
+}
+
+// Parse the reviewer's CHECKLIST section: lines like "- [x] criterion" (met) or
+// "- [ ] criterion" (not met). Returns [] when no checklist is present.
+function parseChecklist(response: string): ChecklistItem[] {
+  const section = response.match(/CHECKLIST:\s*\n([\s\S]*?)(?:\n\s*DECISION:|$)/i);
+  const block = section?.[1] ?? '';
+  const items: ChecklistItem[] = [];
+  for (const line of block.split('\n')) {
+    const m = line.match(/^\s*-\s*\[([ xX])\]\s*(.+?)\s*$/);
+    if (m?.[1] && m[2]) {
+      items.push({ criterion: m[2].trim(), met: m[1].toLowerCase() === 'x' });
+    }
+  }
+  return items;
 }
 
 function extractIssues(response: string): readonly string[] {

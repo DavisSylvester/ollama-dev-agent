@@ -110,3 +110,54 @@ ISSUES:
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pre-completion checklist gate (Phase 1.4)
+// ---------------------------------------------------------------------------
+
+describe('parseReviewDecision — pre-completion checklist', () => {
+  it('parses the checklist items with met/not-met state', () => {
+    const response = [
+      'CHECKLIST:',
+      '- [x] returns 200 on /health',
+      '- [ ] validates the request body',
+      'DECISION: REVISE',
+      'ISSUES:',
+      '- body validation missing',
+    ].join('\n');
+    const result = parseReviewDecision(response);
+    expect(result.checklist).toEqual([
+      { criterion: 'returns 200 on /health', met: true },
+      { criterion: 'validates the request body', met: false },
+    ]);
+  });
+
+  it('SHIP with all items met stays SHIP', () => {
+    const response = [
+      'CHECKLIST:',
+      '- [x] a',
+      '- [x] b',
+      'DECISION: SHIP',
+    ].join('\n');
+    const result = parseReviewDecision(response);
+    expect(result.decision).toBe('ship');
+  });
+
+  it('overrides SHIP to REVISE when any checklist item is unmet', () => {
+    const response = [
+      'CHECKLIST:',
+      '- [x] a',
+      '- [ ] b',
+      'DECISION: SHIP', // reviewer wrongly said SHIP
+    ].join('\n');
+    const result = parseReviewDecision(response);
+    expect(result.decision).toBe('revise');
+    expect(result.issues.some((i) => i.includes('Acceptance criterion not met: b'))).toBe(true);
+  });
+
+  it('does not block SHIP when no checklist is present (graceful)', () => {
+    const result = parseReviewDecision('DECISION: SHIP');
+    expect(result.decision).toBe('ship');
+    expect(result.checklist).toEqual([]);
+  });
+});

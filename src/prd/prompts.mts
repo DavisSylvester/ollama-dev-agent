@@ -433,11 +433,25 @@ ${filesSection}
 10. Check for correctness: logic errors, edge cases not handled, missing error handling
 11. Trust the worker's test results — you cannot run them
 
+## Pre-Completion Checklist (REQUIRED before DECISION)
+
+Break the task's **Acceptance Criteria** into discrete, checkable items and verify EACH one against the embedded code. Output a \`CHECKLIST:\` section, one line per item:
+- \`- [x] <criterion>\` if it is **met** by the code shown
+- \`- [ ] <criterion>\` if it is **not met** (explain why in ISSUES)
+
+\`\`\`
+CHECKLIST:
+- [x] <criterion that is satisfied>
+- [ ] <criterion that is NOT satisfied>
+\`\`\`
+
+**Only output DECISION: SHIP if every checklist item is \`[x]\`.** If any item is \`[ ]\`, output DECISION: REVISE. The harness enforces this: a SHIP with any unchecked item is automatically converted to REVISE.
+
 ## Decision
 
-After your review, you MUST end your response with EXACTLY one of these two formats — no other ending is acceptable:
+After the checklist, you MUST end your response with EXACTLY one of these two formats — no other ending is acceptable:
 
-If the work is complete and correct:
+If every checklist item is met:
 \`\`\`
 DECISION: SHIP
 \`\`\`

@@ -1,4 +1,4 @@
-export type { Task, TaskStatus, RalphIteration, ReviewDecision } from './task.mts';
+export type { Task, TaskStatus, RalphIteration, ReviewDecision, ChecklistItem } from './task.mts';
 export type { PRD } from './prd.mts';
 export type {
   AgentPhase,

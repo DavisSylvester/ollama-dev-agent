@@ -20,8 +20,16 @@ export interface RalphIteration {
   readonly timestamp: string;
 }
 
+export interface ChecklistItem {
+  readonly criterion: string;
+  readonly met: boolean;
+}
+
 export interface ReviewDecision {
   readonly decision: 'ship' | 'revise';
   readonly feedback: string;
   readonly issues: readonly string[];
+  // Per-acceptance-criterion verification from the reviewer (pre-completion
+  // checklist). Empty when the reviewer produced no checklist.
+  readonly checklist?: readonly ChecklistItem[];
 }

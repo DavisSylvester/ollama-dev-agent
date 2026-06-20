@@ -305,6 +305,15 @@ export class RalphLoop {
         // Non-fatal: continue even if we can't persist
       }
 
+      // Persist the pre-completion checklist (per-acceptance-criterion verdicts).
+      if (decision.checklist && decision.checklist.length > 0) {
+        try {
+          await this.contextManager.saveChecklist(task.id, iteration, decision.checklist);
+        } catch {
+          // Non-fatal
+        }
+      }
+
       if (decision.decision === 'revise') {
         try {
           await this.contextManager.saveActivityEntry(

@@ -215,6 +215,12 @@ describe('buildReviewerPrompt', () => {
     expect(prompt).toContain('bun run build');
   });
 
+  it('requires a pre-completion checklist before the decision (Phase 1.4)', () => {
+    expect(prompt).toContain('Pre-Completion Checklist');
+    expect(prompt).toContain('CHECKLIST:');
+    expect(prompt).toMatch(/Only output DECISION: SHIP if every checklist item/i);
+  });
+
   it('includes the worker output', () => {
     expect(prompt).toContain(workerOutput);
   });
