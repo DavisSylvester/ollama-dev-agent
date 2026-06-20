@@ -2,6 +2,7 @@ import { mkdir, writeFile, readFile, readdir, access, appendFile } from 'node:fs
 import { join } from 'node:path';
 import { constants } from 'node:fs';
 import { DateTime } from 'luxon';
+import type { Task } from '../types/index.mts';
 
 export class ContextManager {
 
@@ -28,6 +29,35 @@ export class ContextManager {
     const dir = this.taskDir(taskId);
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, `worker-${iteration}.md`), output, 'utf-8');
+  }
+
+  // Write goal.md at task start so anyone reviewing the activity folder can see
+  // exactly what the task is trying to achieve, without reading worker logs.
+  async saveTaskGoal(task: Task): Promise<void> {
+    const dir = this.taskDir(task.id);
+    await mkdir(dir, { recursive: true });
+    const dependsOn =
+      task.dependsOn.length > 0 ? task.dependsOn.join(', ') : 'none';
+    const content = [
+      `# Goal — ${task.id}: ${task.name}`,
+      ``,
+      `**Feature:** ${this.featureSlug}`,
+      `**Depends on:** ${dependsOn}`,
+      ``,
+      `## What this task is trying to achieve`,
+      ``,
+      task.description,
+      ``,
+      `## Definition of done (acceptance criteria)`,
+      ``,
+      task.acceptanceCriteria,
+      ``,
+      `## How it is verified`,
+      ``,
+      `\`${task.testCommand}\``,
+      ``,
+    ].join('\n');
+    await writeFile(join(dir, 'goal.md'), content, 'utf-8');
   }
 
   async saveReviewerFeedback(

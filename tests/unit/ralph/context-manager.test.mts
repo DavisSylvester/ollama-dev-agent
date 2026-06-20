@@ -232,3 +232,29 @@ describe('ContextManager.listIterations', () => {
     expect(result).toEqual([1, 2, 3]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// saveTaskGoal — goal.md must explain what the task is trying to achieve
+// ---------------------------------------------------------------------------
+
+describe('saveTaskGoal', () => {
+  it('writes goal.md with the task name, description, acceptance, and test command', async () => {
+    await manager.saveTaskGoal({
+      id: TASK_ID,
+      name: 'Build CreateUser component',
+      description: 'Create an Angular standalone component with a form.',
+      acceptanceCriteria: 'Form submits to the API and shows errors.',
+      testCommand: 'bun test create-user.test.mts',
+      dependsOn: ['TASK-011'],
+      status: 'pending',
+      iterationCount: 0,
+    });
+
+    const goal = await readFile(join(taskDir(), 'goal.md'), 'utf-8');
+    expect(goal).toContain('# Goal — TASK-001: Build CreateUser component');
+    expect(goal).toContain('Create an Angular standalone component with a form.');
+    expect(goal).toContain('Form submits to the API and shows errors.');
+    expect(goal).toContain('bun test create-user.test.mts');
+    expect(goal).toContain('TASK-011'); // dependsOn
+  });
+});

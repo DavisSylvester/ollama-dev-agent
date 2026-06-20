@@ -60,6 +60,13 @@ export class RalphLoop {
 
     task.status = 'in_progress';
 
+    // Always record the task's goal so the activity folder is self-explanatory.
+    try {
+      await this.contextManager.saveTaskGoal(task);
+    } catch {
+      // Non-fatal
+    }
+
     // Count of issues logged across iterations so we can record a final
     // "resolved" marker on SHIP only when the task actually struggled.
     let issuesLogged = 0;
