@@ -5,7 +5,9 @@ import { DateTime } from 'luxon';
 import { AgentStateAnnotation } from './state.mts';
 import { emitAgentEvent } from './events.mts';
 import { generatePRD } from '../prd/index.mts';
+import { splitTask, applySplit, canSplit } from '../prd/splitter.mts';
 import { RalphLoop } from '../ralph/index.mts';
+import { ContextManager } from '../ralph/context-manager.mts';
 import { createWorkerTools } from '../tools/index.mts';
 import { env } from '../env.mts';
 import type { AgentStateType } from './state.mts';
@@ -96,6 +98,38 @@ async function runTaskNode(
       mergedTasks = mergedTasks.map((t) =>
         t.id === task.id ? { ...t, status: 'failed' as const } : t,
       );
+    }
+  }
+
+  // --- Auto-split on failure (Phase 0.3) ---
+  // A task that failed (hit its iteration cap) is likely too large. Decompose
+  // it into sub-tasks and run those instead of giving up. Split at most once.
+  const ctx = new ContextManager(state.workingDirectory, state.featureSlug);
+  for (let i = 0; i < readyTasks.length; i++) {
+    const result = results[i]!;
+    if (result.status !== 'fulfilled' || result.value.status !== 'failed') continue;
+    const failed = result.value;
+    if (!canSplit(failed)) continue;
+
+    let failureContext = '';
+    try {
+      failureContext = await ctx.loadActivityLog(failed.id);
+    } catch {
+      failureContext = '';
+    }
+
+    try {
+      const subTasks = await splitTask(failed, failureContext);
+      if (subTasks.length > 0) {
+        mergedTasks = applySplit(mergedTasks, failed.id, subTasks);
+        emitAgentEvent('task_split', {
+          taskId: failed.id,
+          subTaskIds: subTasks.map((s) => s.id),
+          count: subTasks.length,
+        });
+      }
+    } catch {
+      // Splitting is best-effort — leave the task failed if it throws.
     }
   }
 

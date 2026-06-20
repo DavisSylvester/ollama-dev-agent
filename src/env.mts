@@ -20,6 +20,12 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
+  // When a task fails (iteration cap), decompose it into sub-tasks and run those
+  // instead of giving up. Self-correcting for oversized tasks.
+  AUTO_SPLIT_ON_FAILURE: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
   NUM_CTX: z.coerce.number().int().min(2048).default(32768),
   BRAVE_API_KEY: z.string().optional(),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
