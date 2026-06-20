@@ -6,6 +6,7 @@ import { RalphLoop } from '../../../src/ralph/loop.mts';
 import type { Task, ReviewDecision } from '../../../src/types/index.mts';
 import { REACT_TIMEOUT_SENTINEL } from '../../../src/models/react-agent.mts';
 import type { RalphRunnerDeps } from '../../../src/ralph/loop.mts';
+import { toRelativePaths } from '../../../src/ralph/loop.mts';
 import type { LintResult } from '../../../src/tools/run-linter.mts';
 import type { StructuredTool } from '@langchain/core/tools';
 
@@ -663,5 +664,42 @@ describe('RalphLoop.runTask — onToolCall forwarding', () => {
     await loop.runTask(task, NO_TOOLS, events, deps);
 
     expect(toolCalls).toEqual(['read_file', 'write_file']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toRelativePaths — knowledge base must never store absolute paths
+// ---------------------------------------------------------------------------
+
+describe('toRelativePaths', () => {
+  const BS = String.fromCharCode(92); // backslash, avoids escaping noise
+
+  it('strips a Windows absolute working-dir prefix (backslashes)', () => {
+    const wd = ['C:', 'projects', 'oda', 'test-run', 'auth0-admin'].join(BS);
+    const rel = ['apps', 'api', 'index.mts'].join(BS);
+    const text = `${wd}${BS}${rel}  1:1  error  'x' unused`;
+    const out = toRelativePaths(text, wd);
+    expect(out).not.toContain(`C:${BS}projects`);
+    expect(out).toContain(rel);
+  });
+
+  it('strips a POSIX absolute working-dir prefix (forward slashes)', () => {
+    const wd = '/home/u/oda/test-run/auth0-admin';
+    const text = '/home/u/oda/test-run/auth0-admin/libs/auth0-mgmt/src/create-user.mts has an issue';
+    const out = toRelativePaths(text, wd);
+    expect(out).not.toContain('/home/u');
+    expect(out).toContain('libs/auth0-mgmt/src/create-user.mts');
+  });
+
+  it('handles separator mismatch between working dir and text', () => {
+    const wd = 'C:/projects/oda/app';
+    const rel = ['src', 'x.mts'].join(BS);
+    const text = `error in C:${BS}projects${BS}oda${BS}app${BS}${rel}`;
+    expect(toRelativePaths(text, wd)).toContain(rel);
+    expect(toRelativePaths(text, wd)).not.toContain(`C:${BS}projects`);
+  });
+
+  it('leaves text without the working dir untouched', () => {
+    expect(toRelativePaths('a plain message', '/some/wd')).toBe('a plain message');
   });
 });

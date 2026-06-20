@@ -359,6 +359,7 @@ export class RalphLoop {
 
   // Append ONE issue → resolution record to the global knowledge base, flushed
   // immediately so nothing is lost on long or interrupted runs.
+  // All path-like strings are relativized — the KB NEVER stores absolute paths.
   private async logIssue(
     task: Task,
     issue: string,
@@ -367,10 +368,10 @@ export class RalphLoop {
     status: string,
   ): Promise<void> {
     await appendEntry(categorizeTask(task), {
-      issue,
-      prompt: `${task.name}: ${task.description}`,
+      issue: toRelativePaths(issue, this.workingDirectory),
+      prompt: toRelativePaths(`${task.name}: ${task.description}`, this.workingDirectory),
       model: env.CODER_MODEL,
-      resolution,
+      resolution: toRelativePaths(resolution, this.workingDirectory),
       metadata: {
         taskId: task.id,
         iterations: iteration,
@@ -405,6 +406,27 @@ function extractChangedFiles(log: ToolCallEntry[]): string[] {
     }
   }
   return [...files];
+}
+
+// Strip the absolute working-directory prefix from any path in `text`, leaving
+// project-relative paths. Handles both / and \ separators (Windows tooling like
+// ESLint emits backslash absolute paths). The knowledge base must NEVER store
+// absolute paths, so every KB write passes through this.
+export function toRelativePaths(text: string, workingDirectory: string): string {
+  if (!text || !workingDirectory) return text;
+  // Try both separator normalizations of the working dir.
+  const variants = new Set<string>([
+    workingDirectory,
+    workingDirectory.replace(/\\/g, '/'),
+    workingDirectory.replace(/\//g, '\\'),
+  ]);
+  let out = text;
+  for (const variant of variants) {
+    const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Remove the prefix plus any leading separator so "<wd>/apps/x" → "apps/x".
+    out = out.replace(new RegExp(`${escaped}[\\\\/]?`, 'g'), '');
+  }
+  return out;
 }
 
 // First non-empty line of multi-line tool output, trimmed for KB summaries.
