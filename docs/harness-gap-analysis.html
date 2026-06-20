@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ODA Harness Gap Analysis</title>
+<style>
+  :root{
+    --have:#1a7f37; --have-bg:#e9f5ec;
+    --partial:#9a6700; --partial-bg:#fdf6e3;
+    --gap:#cf222e; --gap-bg:#fbeaec;
+    --ink:#1c2128; --muted:#57606a; --line:#d0d7de; --bg:#f6f8fa; --card:#fff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink);background:var(--bg);line-height:1.5;padding:2rem 1rem}
+  .wrap{max-width:1040px;margin:0 auto}
+  h1{font-size:1.7rem;margin:0 0 .25rem}
+  .sub{color:var(--muted);margin:0 0 1.5rem;font-size:.95rem}
+  .score{display:flex;gap:.75rem;flex-wrap:wrap;margin:0 0 1.75rem}
+  .chip{border-radius:10px;padding:.6rem .9rem;font-size:.85rem;font-weight:600;border:1px solid var(--line);background:var(--card)}
+  .chip b{font-size:1.3rem;display:block;font-weight:800}
+  .chip.have{color:var(--have)} .chip.partial{color:var(--partial)} .chip.gap{color:var(--gap)}
+  h2{font-size:1.05rem;margin:2rem 0 .6rem;padding-bottom:.3rem;border-bottom:2px solid var(--line)}
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+  table{border-collapse:collapse;width:100%;min-width:720px;font-size:.9rem}
+  th,td{text-align:left;padding:.6rem .7rem;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--bg);font-weight:700;position:sticky;top:0}
+  tr:last-child td{border-bottom:none}
+  .badge{display:inline-block;font-size:.72rem;font-weight:700;border-radius:20px;padding:.12rem .55rem;white-space:nowrap}
+  .badge.have{color:var(--have);background:var(--have-bg)}
+  .badge.partial{color:var(--partial);background:var(--partial-bg)}
+  .badge.gap{color:var(--gap);background:var(--gap-bg)}
+  td.p{font-weight:600;width:21%}
+  td.n{color:var(--muted);width:46%}
+  code{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:.05rem .35rem;font-size:.82em}
+  .pri{margin-top:2rem;border:1px solid var(--line);border-radius:10px;background:var(--card);padding:1rem 1.25rem}
+  .pri ol{margin:.4rem 0 0;padding-left:1.2rem}
+  .pri li{margin:.45rem 0}
+  .pri b{color:var(--gap)}
+  footer{color:var(--muted);font-size:.8rem;margin-top:2rem;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ODA Agent Harness — Gap Analysis</h1>
+  <p class="sub">Ollama Dev Agent vs. patterns from the 3 harness-engineering articles (LangChain ×2, Martin Richards). Status as of 2026-06-20.</p>
+
+  <div class="score">
+    <div class="chip have">Have<b>11</b></div>
+    <div class="chip partial">Partial<b>7</b></div>
+    <div class="chip gap">Gap<b>8</b></div>
+  </div>
+
+  <h2>✅ Already have (strong)</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Pattern</th><th>Status</th><th>Where in ODA</th></tr>
+    <tr><td class="p">Core agent loop (model + tools)</td><td><span class="badge have">Have</span></td><td class="n">ReAct loop in <code>react-agent.mts</code> — model calls tools until a tool-less final answer.</td></tr>
+    <tr><td class="p">Memory / knowledge base</td><td><span class="badge have">Have</span></td><td class="n"><b>Built this session.</b> Global <code>.ai/knowledge-base/</code>, categorized, actual+generalized, loaded into every worker prompt, written back on issues. Matches MemoryMiddleware.</td></tr>
+    <tr><td class="p">Context engineering (inject env)</td><td><span class="badge have">Have</span></td><td class="n">Directory listing, installed packages, coding standards, and KB injected into the worker prompt each iteration.</td></tr>
+    <tr><td class="p">Self-verification loop</td><td><span class="badge have">Have</span></td><td class="n">Worker runs tests → mandatory lint gate → Reviewer judges SHIP/REVISE.</td></tr>
+    <tr><td class="p">Enforced verification gate</td><td><span class="badge have">Have</span></td><td class="n">Lint gate runs unconditionally between Worker and Reviewer; can't be skipped.</td></tr>
+    <tr><td class="p">Environment access (tools)</td><td><span class="badge have">Have</span></td><td class="n">file read/write/edit/delete, shell_exec, run_tests, run_linter, install, web search.</td></tr>
+    <tr><td class="p">Research → Plan → Implement</td><td><span class="badge have">Have</span></td><td class="n">Planner generates PRD → tasks → Ralph loop. Planning is now research-enabled (web + read-only tools).</td></tr>
+    <tr><td class="p">Test-driven tasks</td><td><span class="badge have">Have</span></td><td class="n">Each task carries a <code>testCommand</code>; worker must pass it before completion.</td></tr>
+    <tr><td class="p">Cost/limit control</td><td><span class="badge have">Have</span></td><td class="n"><code>MAX_REACT_STEPS</code>, per-tool <code>TOOL_CALL_LIMITS</code>, <code>MAX_ITERATIONS</code>, read_file dedup cache.</td></tr>
+    <tr><td class="p">Persistence & resume</td><td><span class="badge have">Have</span></td><td class="n">All state on disk under <code>.ai/</code>; <code>.complete</code> markers skip done tasks on restart.</td></tr>
+    <tr><td class="p">Spec/goal artifacts</td><td><span class="badge have">Have</span></td><td class="n">PRD markdown + per-task <code>goal.md</code> (added this session) as shared, reviewable state.</td></tr>
+  </table></div>
+
+  <h2>🟡 Partial (exists but incomplete)</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Pattern</th><th>Status</th><th>Gap / recommendation</th></tr>
+    <tr><td class="p">Loop / doom-loop detection</td><td><span class="badge partial">Partial</span></td><td class="n">We added <b>tool-thrash</b> detection (per-tool-name counts). Missing the article's <b>per-file edit-count</b> detection to catch a worker rewriting the same file repeatedly.</td></tr>
+    <tr><td class="p">Error handling & retries</td><td><span class="badge partial">Partial</span></td><td class="n">Model calls retry w/ backoff (<code>invokeWithRetry</code>); coder model has fallback. Missing: per-tool retry, and fallback for planner/reviewer models.</td></tr>
+    <tr><td class="p">Pre-completion checklist</td><td><span class="badge partial">Partial</span></td><td class="n">Lint gate is enforced, but nothing explicitly verifies <b>each acceptance criterion</b> before the worker exits — that's left to the Reviewer's judgment.</td></tr>
+    <tr><td class="p">Human-in-the-loop</td><td><span class="badge partial">Partial</span></td><td class="n">PRD approve/reject only. No pause-before-consequential-action, no inline annotation cycle.</td></tr>
+    <tr><td class="p">Time budgeting</td><td><span class="badge partial">Partial</span></td><td class="n">Step-budget warnings exist; no <b>wall-clock</b> budget. Directly relevant: the TASK-009 hang burned ~20 min with no time-based cutoff.</td></tr>
+    <tr><td class="p">Task delegation</td><td><span class="badge partial">Partial</span></td><td class="n">LangGraph runs tasks in parallel, but a task's Worker is monolithic — no nested sub-agents with clean context for sub-steps.</td></tr>
+    <tr><td class="p">Skill loading by context</td><td><span class="badge partial">Partial</span></td><td class="n">KB category matching (ui/api/db/auth) is similar in spirit, but there's no executable <b>skills</b> system (sequential workflows / advisory skills).</td></tr>
+  </table></div>
+
+  <h2>🔴 Gaps (not present)</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Pattern</th><th>Status</th><th>What's missing &amp; why it matters</th></tr>
+    <tr><td class="p">Context compaction / summarization</td><td><span class="badge gap">Gap</span></td><td class="n">ODA <b>resets</b> context each iteration instead of summarizing. Within one long ReAct iteration, message history can still grow unbounded — no SummarizationMiddleware / ContextEditing. Biggest structural gap for long tasks.</td></tr>
+    <tr><td class="p">Reasoning budget allocation</td><td><span class="badge gap">Gap</span></td><td class="n">No "reasoning sandwich" — no deliberate allocation of model thinking toward planning &amp; verification over implementation.</td></tr>
+    <tr><td class="p">Trace analysis for self-improvement</td><td><span class="badge gap">Gap</span></td><td class="n">No automated harvesting of run traces to find failure modes and tune the harness. The KB is the closest, but it's populated reactively, not from systematic trace analysis.</td></tr>
+    <tr><td class="p">Todo-list scratchpad (in-task)</td><td><span class="badge gap">Gap</span></td><td class="n">The Worker has no explicit todo list to decompose a task and track sub-steps within its own context window.</td></tr>
+    <tr><td class="p">Annotation cycle / backflow</td><td><span class="badge gap">Gap</span></td><td class="n">Once the PRD is approved, tasks are fixed. No inline human annotation of plans, and no mechanism for mid-implementation discovery to push work back to re-planning.</td></tr>
+    <tr><td class="p">Skills architecture (namespaces)</td><td><span class="badge gap">Gap</span></td><td class="n">No <code>spec:</code> / <code>oracle:</code> / <code>code:</code>-style skills that behave differently (workflow vs advisory vs utility).</td></tr>
+    <tr><td class="p">Delta tracking (brownfield)</td><td><span class="badge gap">Gap</span></td><td class="n">No ADDED/MODIFIED/REMOVED marking for evolving specs / existing codebases.</td></tr>
+    <tr><td class="p">Process/resource hygiene</td><td><span class="badge gap">Gap</span></td><td class="n">Surfaced today: <code>shell_exec</code> can spawn long-lived servers that aren't reliably killed on Windows, leaking processes across runs. No process-tree cleanup or server-start guard.</td></tr>
+  </table></div>
+
+  <div class="pri">
+    <strong>Highest-leverage gaps to close next</strong>
+    <ol>
+      <li><b>Context compaction</b> inside the ReAct loop (summarize tool output / old turns) — the one structural gap that limits long, hard tasks like TASK-009.</li>
+      <li><b>Wall-clock time budget + per-file edit-loop detection</b> — would have auto-aborted today's 20-minute <code>shell_exec</code> hang instead of needing a manual kill.</li>
+      <li><b>Process hygiene / server-start guard</b> — kill the shell_exec process tree on timeout; block/guard long-lived <code>listen()</code> commands (KB anti-pattern added today is a stopgap).</li>
+      <li><b>Pre-completion checklist</b> — verify every acceptance criterion before exit, not just lint + reviewer judgment.</li>
+      <li><b>In-task todo list + sub-agents</b> — let a hard task decompose itself with clean sub-contexts.</li>
+    </ol>
+  </div>
+
+  <footer>Sources: langchain.com/blog/how-to-build-a-custom-agent-harness · martinrichards.me/post/building_your_own_agent_harness · langchain.com/blog/improving-deep-agents-with-harness-engineering</footer>
+</div>
+</body>
+</html>
