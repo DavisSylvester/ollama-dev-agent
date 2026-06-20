@@ -211,12 +211,20 @@ All tools validate paths to stay within `workingDirectory` — no filesystem esc
 
 ### Generation
 
+Planning is **research-enabled**: the Planner runs as a ReAct agent with a set of
+read-only tools, so it can inspect the existing project and research the web before
+writing tasks. It stops calling tools and emits the final PRD markdown as its last message.
+
 ```
 User prompt
     ↓
-Planner LLM
+Planner ReAct agent  ──→  read-only tools:
+    │                       • read_file / list_directory / glob_search / grep_search
+    │                         (inspect the existing project)
+    │                       • web_search_ddg / web_search_brave
+    │                         (research current library versions & best practices)
     ↓
-Markdown PRD
+Markdown PRD (final tool-less answer)
     ↓
 Parser (regex extraction)
     ↓
@@ -224,6 +232,11 @@ Task[] array
     ↓
 Saved to .ai/planning/<slug>/prd.md
 ```
+
+The planner has a dedicated step budget (`PLANNER_MAX_STEPS`, default 15). If it exhausts
+the budget without producing a PRD, generation fails loudly rather than feeding the parser
+a malformed document. All mutating tools (write/edit/delete/shell/install) are deliberately
+withheld — planning can never modify the target project.
 
 ### PRD Format
 
@@ -347,9 +360,11 @@ All validated at startup with Zod via `src/env.mts`. Never access `Bun.env` dire
 | `CODER_MODEL` | `qwen3-coder:30b` | Worker model |
 | `EDITOR_MODEL` | `devstral-small-2` | Reviewer model |
 | `MAX_ITERATIONS` | `5` | Max Ralph iterations per task |
-| `MAX_REACT_STEPS` | `30` | Max ReAct steps per LLM call |
+| `MAX_REACT_STEPS` | `20` | Max ReAct steps per Worker run |
+| `REVIEWER_MAX_STEPS` | `8` | Max steps for the reviewer |
+| `PLANNER_MAX_STEPS` | `15` | Max research steps during PRD generation |
 | `NUM_CTX` | `32768` | LLM context window size |
-| `BRAVE_API_KEY` | — | Optional, for Brave Search |
+| `BRAVE_API_KEY` | — | Optional, for Brave Search (planner + worker) |
 | `LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
 | `LOG_FILE` | `.oda.log` | Log output file |
 

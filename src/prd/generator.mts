@@ -2,43 +2,51 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { PRD } from '../types/index.mts';
 import { createChatModel } from '../models/index.mts';
+import { createPlannerTools } from '../tools/index.mts';
+import { runReactAgent, REACT_TIMEOUT_SENTINEL } from '../models/react-agent.mts';
 import { env } from '../env.mts';
+import { logger } from '../logger.mts';
 import { buildPRDGenerationPrompt } from './prompts.mts';
 import { extractFeatureName, extractFeatureSlug, parseTasks } from './parser.mts';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+
+// Injected agent runner — lets tests drive PRD generation without a live model.
+export interface PRDGeneratorDeps {
+  readonly runAgentFn?: typeof runReactAgent;
+}
 
 export async function generatePRD(
   userPrompt: string,
   workingDirectory: string,
+  onToolCall?: (toolName: string, args: Record<string, unknown>) => void,
+  deps?: PRDGeneratorDeps,
 ): Promise<PRD> {
+  const runAgent = deps?.runAgentFn ?? runReactAgent;
   const model = createChatModel(env.PLANNER_MODEL);
+  const tools = createPlannerTools(workingDirectory, env.BRAVE_API_KEY);
 
   const systemPrompt = buildPRDGenerationPrompt(userPrompt);
 
-  const response = await model.invoke([
-    new SystemMessage(systemPrompt),
-    new HumanMessage(userPrompt),
-  ]);
+  const rawMarkdown = await runAgent(
+    model,
+    tools,
+    systemPrompt,
+    userPrompt,
+    env.PLANNER_MAX_STEPS,
+    onToolCall,
+  );
 
-  const rawMarkdown =
-    typeof response.content === 'string'
-      ? response.content
-      : Array.isArray(response.content)
-        ? response.content
-            .map((block) => {
-              if (typeof block === 'string') return block;
-              if (
-                typeof block === 'object' &&
-                block !== null &&
-                'text' in block &&
-                typeof (block as { text: unknown }).text === 'string'
-              ) {
-                return (block as { text: string }).text;
-              }
-              return '';
-            })
-            .join('')
-        : String(response.content);
+  // If the planner exhausted its research budget without producing a final PRD,
+  // fail loudly rather than handing the parser a sentinel string to mangle.
+  if (rawMarkdown.startsWith(REACT_TIMEOUT_SENTINEL)) {
+    logger.error(
+      { plannerMaxSteps: env.PLANNER_MAX_STEPS },
+      'prd.generation_timeout: planner exhausted its step budget without producing a PRD',
+    );
+    throw new Error(
+      `PRD generation failed: the planner used all ${env.PLANNER_MAX_STEPS} research steps ` +
+      `without producing a final PRD. Try a more specific prompt or raise PLANNER_MAX_STEPS.`,
+    );
+  }
 
   const featureName = extractFeatureName(rawMarkdown);
   const featureSlug = extractFeatureSlug(rawMarkdown);

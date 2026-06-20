@@ -6,6 +6,18 @@ export function buildPRDGenerationPrompt(userPrompt: string): string {
 
 Your task is to generate a detailed Product Requirements Document (PRD) for the feature described by the user.
 
+## Research Tools
+
+You have read-only research tools available. Use them BEFORE writing the PRD to ground your plan in reality:
+
+- \`list_directory\`, \`read_file\`, \`glob_search\`, \`grep_search\` — inspect the **existing project** so tasks fit the current structure, dependencies, and conventions. Read \`package.json\` to see what is already installed. Do NOT invent files or assume a greenfield project without checking.
+- \`web_search_ddg\` (and \`web_search_brave\` if available) — research current library versions, APIs, and best practices. Verify the latest stable version of any framework you plan to use rather than relying on memory.
+
+Research guidelines:
+- Do a focused amount of research — a few targeted lookups, not exhaustive exploration.
+- Once you have enough context, STOP calling tools and write the PRD.
+- **Your final message — with no tool calls — MUST be the complete PRD in the exact format below.** Do not return tool calls in your final turn. Do not wrap the PRD in commentary; output only the PRD markdown.
+
 ## Output Format
 
 You MUST produce the PRD in EXACTLY this format — no deviations:

@@ -23,7 +23,13 @@ async function generatePRDNode(
 
   emitAgentEvent('phase_changed', { phase: 'generating_prd' });
 
-  const prd = await generatePRD(state.userPrompt, state.workingDirectory);
+  const prd = await generatePRD(
+    state.userPrompt,
+    state.workingDirectory,
+    (toolName, args) => {
+      emitAgentEvent('tool_called', { toolName, args, phase: 'generating_prd' });
+    },
+  );
 
   emitAgentEvent('prd_generated', {
     prd,

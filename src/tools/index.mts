@@ -48,3 +48,20 @@ export function createWorkerTools(
     createWebSearchBraveTool(braveApiKey),
   ];
 }
+
+// Read-only research tools for the planner: inspect the existing project and
+// research the web. Deliberately excludes all mutating tools (write/edit/delete/
+// shell/install) so planning can never modify the target project.
+export function createPlannerTools(
+  workingDirectory: string,
+  braveApiKey?: string,
+): StructuredTool[] {
+  return [
+    createFileReadTool(workingDirectory),
+    createListDirectoryTool(workingDirectory),
+    createGlobSearchTool(workingDirectory),
+    createGrepSearchTool(workingDirectory),
+    createWebSearchDDGTool(),
+    createWebSearchBraveTool(braveApiKey),
+  ];
+}

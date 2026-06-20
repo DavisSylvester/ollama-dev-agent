@@ -8,6 +8,7 @@ const envSchema = z.object({
   MAX_ITERATIONS: z.coerce.number().int().min(1).max(20).default(5),
   MAX_REACT_STEPS: z.coerce.number().int().min(5).max(100).default(20),
   REVIEWER_MAX_STEPS: z.coerce.number().int().min(3).max(20).default(8),
+  PLANNER_MAX_STEPS: z.coerce.number().int().min(5).max(50).default(15),
   NUM_CTX: z.coerce.number().int().min(2048).default(32768),
   BRAVE_API_KEY: z.string().optional(),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
