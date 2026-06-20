@@ -8,6 +8,7 @@ import {
 } from '@langchain/core/messages';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
+import { DateTime } from 'luxon';
 
 // ---------------------------------------------------------------------------
 // LLM invoke retry — wraps the model call with exponential backoff so
@@ -99,7 +100,23 @@ export async function runReactAgent(
   let emptyRetries = 0;
   const MAX_EMPTY_RETRIES = 2;
 
+  // Wall-clock budget — independent of step count. Catches a single hung tool
+  // call (e.g. a server start) that would otherwise consume the whole run.
+  const startMs = DateTime.utc().toMillis();
+  const deadlineMs = startMs + env.MAX_ITERATION_SECONDS * 1000;
+
   for (let step = 0; step < limit; step++) {
+    if (DateTime.utc().toMillis() >= deadlineMs) {
+      const uniqueTools = [...new Set(toolCallCounts.keys())];
+      logger.warn(
+        { step, elapsedSeconds: Math.round((DateTime.utc().toMillis() - startMs) / 1000), maxSeconds: env.MAX_ITERATION_SECONDS },
+        'react_agent.wall_clock_timeout',
+      );
+      return (
+        `${REACT_TIMEOUT_SENTINEL} (wall-clock ${env.MAX_ITERATION_SECONDS}s exceeded) ` +
+        `without a final answer. Tools attempted: ${uniqueTools.join(', ') || 'none'}.`
+      );
+    }
     logger.debug({ step, totalSteps: limit }, 'react_agent.step');
 
     const aiMessage = await invokeWithRetry(modelWithTools as BaseChatModel, messages);

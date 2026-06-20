@@ -485,13 +485,27 @@ const THRASH_GUIDANCE: Record<string, string> = {
   list_directory: 'The directory structure is already known — stop listing and start writing.',
 };
 
-// Detect tool-call loops within a single iteration's tool log.
+// A single file rewritten this many times in one iteration signals a doom loop.
+const FILE_EDIT_THRESHOLD = 4;
+
+// Detect tool-call loops within a single iteration's tool log: both per-tool
+// (re-running/re-reading) and per-file (rewriting the same file repeatedly).
 function detectToolThrash(log: ToolCallEntry[]): ThrashIssue[] {
   const counts = new Map<string, number>();
+  const fileEdits = new Map<string, number>();
   for (const entry of log) {
     counts.set(entry.toolName, (counts.get(entry.toolName) ?? 0) + 1);
+    if (entry.toolName === 'write_file' || entry.toolName === 'edit_file') {
+      const path = entry.args['path'];
+      if (typeof path === 'string' && path.length > 0) {
+        fileEdits.set(path, (fileEdits.get(path) ?? 0) + 1);
+      }
+    }
   }
+
   const issues: ThrashIssue[] = [];
+
+  // Per-tool thrash (verification/exploration loops).
   for (const [tool, count] of counts) {
     const threshold = THRASH_THRESHOLDS[tool];
     if (threshold !== undefined && count >= threshold) {
@@ -503,6 +517,19 @@ function detectToolThrash(log: ToolCallEntry[]): ThrashIssue[] {
       });
     }
   }
+
+  // Per-file edit loop (rewriting the same file over and over).
+  for (const [path, count] of fileEdits) {
+    if (count >= FILE_EDIT_THRESHOLD) {
+      issues.push({
+        issue: `Worker edited the same file (${path}) ${count} times in a single iteration`,
+        resolution:
+          `Stop rewriting ${path}. Re-read the failing test/error, decide the correct final content, ` +
+          `and write it once. Repeated edits to one file mean the approach needs rethinking, not another tweak.`,
+      });
+    }
+  }
+
   return issues;
 }
 

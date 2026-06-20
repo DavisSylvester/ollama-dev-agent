@@ -9,6 +9,9 @@ const envSchema = z.object({
   EDITOR_MODEL: z.string().default('devstral-small-2'),
   MAX_ITERATIONS: z.coerce.number().int().min(1).max(50).default(30),
   MAX_REACT_STEPS: z.coerce.number().int().min(5).max(100).default(20),
+  // Wall-clock cap per worker iteration (seconds). Independent of step count —
+  // catches a single hung tool call that would otherwise consume the whole run.
+  MAX_ITERATION_SECONDS: z.coerce.number().int().min(30).max(1800).default(420),
   REVIEWER_MAX_STEPS: z.coerce.number().int().min(3).max(20).default(8),
   PLANNER_MAX_STEPS: z.coerce.number().int().min(5).max(50).default(15),
   // Web-search-enabled planning. Disable for a fast single-shot PRD call.

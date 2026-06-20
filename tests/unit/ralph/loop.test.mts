@@ -552,6 +552,30 @@ describe('RalphLoop.runTask — lint gate', () => {
     expect(apiKb).toContain('anti-pattern');
   });
 
+  it('logs an anti-pattern when the worker edits the same file repeatedly (Phase 1.3)', async () => {
+    const task = makeTask();
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+
+    const deps: RalphRunnerDeps = {
+      workerFn: async (params) => {
+        // Simulate rewriting the same file 4 times in one iteration (doom loop).
+        for (let i = 0; i < 4; i++) {
+          params.onToolCall?.('edit_file', { path: 'src/server.mts', old_text: 'a', new_text: 'b' });
+        }
+        return 'output';
+      },
+      reviewerFn: async () => makeShipDecision(),
+      lintFn: async () => ({ clean: true, output: 'clean' }),
+    };
+
+    await loop.runTask(task, NO_TOOLS, undefined, deps);
+
+    const apiKb = await readFile(join(process.env['ODA_KB_DIR']!, 'api.json'), 'utf-8');
+    expect(apiKb).toContain('src/server.mts');
+    expect(apiKb).toContain('edited the same file');
+  });
+
   it('flushes a lint issue to the knowledge base immediately (not only at task end)', async () => {
     const task = makeTask();
     let workerCalls = 0;
