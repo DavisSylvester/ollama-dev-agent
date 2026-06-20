@@ -575,6 +575,36 @@ describe('RalphLoop.runTask — lint gate', () => {
     expect(apiKb.some((e) => e.metadata.status === 'lint')).toBe(true);
   });
 
+  it('records the exact fix (worker summary + files) in the resolved KB entry', async () => {
+    const task = makeTask();
+    let workerCalls = 0;
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+
+    const summary = 'Added page/limit query params to src/users.mts and updated the service to slice results.';
+    const deps: RalphRunnerDeps = {
+      workerFn: async () => {
+        workerCalls++;
+        return workerCalls === 1 ? 'first attempt' : summary;
+      },
+      reviewerFn: async () => makeShipDecision(),
+      // Fail lint on iteration 1 so an issue is logged; clean on iteration 2 → ships.
+      lintFn: async () =>
+        workerCalls === 1
+          ? { clean: false, output: "src/users.mts  1:1  error  'x' unused" }
+          : { clean: true, output: 'clean' },
+    };
+
+    await loop.runTask(task, NO_TOOLS, undefined, deps);
+
+    const apiKb = JSON.parse(await readFile(join(process.env['ODA_KB_DIR']!, 'api.json'), 'utf-8')) as Array<{ actual_resolution: string; metadata: { status?: string } }>;
+    const resolved = apiKb.find((e) => e.metadata.status === 'resolved');
+    expect(resolved).toBeDefined();
+    // The resolution must be the exact fix, NOT a vague "Resolved after N iterations".
+    expect(resolved!.actual_resolution).toContain(summary);
+    expect(resolved!.actual_resolution).not.toMatch(/^Resolved after \d+ iteration/);
+  });
+
   it('fires onLintComplete with the lint result', async () => {
     const task = makeTask();
     const lintEvents: Array<{ clean: boolean; output: string }> = [];

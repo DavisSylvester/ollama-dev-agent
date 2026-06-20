@@ -326,12 +326,16 @@ export class RalphLoop {
           // Non-fatal
         }
         logger.info({ taskId: task.id, iteration }, 'ralph.task_complete');
-        // Record a resolved marker so future runs see this was overcome.
+        // Record the EXACT fix that resolved the task: the files changed in the
+        // shipping iteration plus the worker's own summary of what it did.
         if (issuesLogged > 0) {
+          const changed = extractChangedFiles(toolCallLog);
+          const filesLine = changed.length > 0 ? `Files changed: ${changed.join(', ')}\n\n` : '';
+          const exactFix = `${filesLine}${workerOutput.trim()}`.slice(0, 2000);
           await this.logIssue(
             task,
-            `Task had ${issuesLogged} issue(s) but was completed`,
-            `Resolved after ${iteration} iteration(s) and shipped.`,
+            `Resolved after ${issuesLogged} issue(s) over ${iteration} iteration(s)`,
+            exactFix,
             iteration,
             'resolved',
           );
