@@ -49,6 +49,20 @@ describe('buildPRDGenerationPrompt', () => {
     expect(prompt).toContain('.mts');
   });
 
+  it('includes explicit task-sizing rules (Phase 0.1)', () => {
+    const prompt = buildPRDGenerationPrompt('anything');
+    expect(prompt).toContain('Task Sizing');
+    expect(prompt).toContain('one focused pass');
+    expect(prompt).toContain('Split tasks that span multiple concerns');
+  });
+
+  it('explains dependsOn ordering and parallelism (Phase 0.2)', () => {
+    const prompt = buildPRDGenerationPrompt('anything');
+    expect(prompt).toContain('Depends On');
+    expect(prompt).toContain('in parallel');
+    expect(prompt).toMatch(/later stories MUST declare/i);
+  });
+
   it('includes the research-tools section by default', () => {
     const prompt = buildPRDGenerationPrompt('anything');
     expect(prompt).toContain('Research Tools');

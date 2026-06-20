@@ -70,7 +70,29 @@ You MUST produce the PRD in EXACTLY this format — no deviations:
 - Use sequential numbering: TASK-001, TASK-002, TASK-003, ...
 - All implementation must target **BunJS** runtime with **TypeScript strict mode**
 - All source files use the \`.mts\` extension; imports must include the \`.mts\` extension
-- Use **Depends On** to declare inter-task dependencies. Omit it entirely for tasks with no dependencies. Tasks without dependencies will run in parallel with other dependency-free tasks.
+
+## Task Sizing — CRITICAL
+
+Each task is implemented by a single worker in **one focused pass** with a limited step budget. Oversized tasks time out and fail. Size every task accordingly:
+
+- **One task ≈ one module plus its test.** A task should be completable in a single focused pass.
+- **Split tasks that span multiple concerns.** If a task would involve project scaffolding AND a server entrypoint AND validation setup AND error handling AND multiple endpoints, that is **several tasks**, not one. Break it apart.
+- **Prefer more, smaller, independently-testable stories** over fewer large ones. Smaller stories pass in one iteration, isolate failures, and parallelize.
+
+Good vs bad example:
+
+- ❌ **Too big**: "Scaffold Elysia API app with TypeBox validation, onError handling, and health/ready endpoints" (5+ concerns in one task — will time out).
+- ✅ **Right-sized split**:
+  - TASK-00Xa: App entrypoint + \`/health\` (liveness) + \`/ready\` (readiness)
+  - TASK-00Xb: Centralized \`onError\` hook + error response envelope (**Depends On**: TASK-00Xa)
+  - TASK-00Xc: TypeBox validation scaffolding for request bodies (**Depends On**: TASK-00Xa)
+
+## Dependencies & Ordering
+
+- Use **Depends On** to declare inter-task dependencies. Omit it entirely for tasks with no dependencies.
+- Tasks without dependencies run **in parallel**; dependent tasks run **after** their dependencies complete.
+- When you split one concern into sequential stories, later stories MUST declare \`Depends On\` the earlier story (e.g. the onError task depends on the app-entrypoint task).
+- Keep independent stories dependency-free so they parallelize — do NOT add unnecessary \`Depends On\` chains that serialize work that could run concurrently.
 - Keep tasks focused: one concern per task
 - Do NOT include tasks for documentation, README updates, or generic "cleanup"
 - Acceptance criteria must be concrete and verifiable, not vague
