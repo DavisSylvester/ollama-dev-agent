@@ -1,0 +1,14 @@
+{
+  "name": "@davissylvester/api-common",
+  "version": "0.1.0",
+  "description": "Shared API utilities for ODA-generated projects",
+  "module": "src/index.mts",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.mts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.3"
+  }
+}
