@@ -56,6 +56,13 @@ async function invokeWithRetry(
 // string-matching the full message.
 export const REACT_TIMEOUT_SENTINEL = 'Reached maximum steps';
 
+type ConvMessage = SystemMessage | HumanMessage | AIMessage | ToolMessage;
+
+// Compact when estimated tokens exceed this fraction of the context window.
+const CONTEXT_COMPACT_RATIO = 0.7;
+// Most-recent messages always kept verbatim (never summarized).
+const KEEP_RECENT_MESSAGES = 6;
+
 // Hard per-run limits for exploration/verification tools.
 // Once a tool exceeds its limit, every subsequent call returns an error message
 // telling the model to act rather than explore.
@@ -85,10 +92,24 @@ export async function runReactAgent(
   }
   const modelWithTools = model.bindTools(tools);
 
-  const messages: (SystemMessage | HumanMessage | AIMessage | ToolMessage)[] = [
+  let messages: ConvMessage[] = [
     new SystemMessage(systemPrompt),
     new HumanMessage(userPrompt),
   ];
+
+  // Summarizer for context compaction — uses the UNBOUND model (no tools) so it
+  // can't try to call tools while summarizing.
+  const summarize = async (text: string): Promise<string> => {
+    const res = (await model.invoke([
+      new SystemMessage(
+        'Summarize this agent work-log concisely as terse bullet points. Capture: ' +
+        'files created/modified, key decisions, test/lint results, and any unresolved ' +
+        'errors. This replaces older context to save tokens — preserve facts, drop prose.',
+      ),
+      new HumanMessage(text.slice(0, 12000)),
+    ])) as AIMessage;
+    return extractContent(res);
+  };
 
   // Per-run call count per tool name
   const toolCallCounts = new Map<string, number>();
@@ -117,6 +138,18 @@ export async function runReactAgent(
         `without a final answer. Tools attempted: ${uniqueTools.join(', ') || 'none'}.`
       );
     }
+    // Context compaction — when the conversation approaches the context window,
+    // summarize older turns (at a clean tool-call boundary) so a long iteration
+    // doesn't overflow. Reduces size in place; safe to run every step.
+    if (estimateTokens(messages) > env.NUM_CTX * CONTEXT_COMPACT_RATIO) {
+      const before = messages.length;
+      messages = await compactConversation(messages, summarize);
+      logger.info(
+        { step, messagesBefore: before, messagesAfter: messages.length, estTokens: estimateTokens(messages) },
+        'react_agent.context_compacted',
+      );
+    }
+
     logger.debug({ step, totalSteps: limit }, 'react_agent.step');
 
     const aiMessage = await invokeWithRetry(modelWithTools as BaseChatModel, messages);
@@ -290,4 +323,97 @@ function extractContent(aiMessage: AIMessage): string {
       .join('');
   }
   return String(content);
+}
+
+// ---------------------------------------------------------------------------
+// Context compaction
+// ---------------------------------------------------------------------------
+
+function messageContentText(m: ConvMessage): string {
+  const content = (m as { content: unknown }).content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b) =>
+        typeof b === 'string'
+          ? b
+          : typeof b === 'object' && b !== null && 'text' in b && typeof (b as { text: unknown }).text === 'string'
+            ? (b as { text: string }).text
+            : '',
+      )
+      .join('');
+  }
+  return content == null ? '' : String(content);
+}
+
+// Rough token estimate (~4 chars/token) over all message content.
+export function estimateTokens(messages: ConvMessage[]): number {
+  let chars = 0;
+  for (const m of messages) chars += messageContentText(m).length;
+  return Math.ceil(chars / 4);
+}
+
+function roleOf(m: ConvMessage): string {
+  if (m instanceof ToolMessage) return 'tool';
+  if (m instanceof HumanMessage) return 'user';
+  if (m instanceof SystemMessage) return 'system';
+  return 'assistant';
+}
+
+function renderForSummary(messages: ConvMessage[]): string {
+  const MAX_PER = 1500;
+  return messages
+    .map((m) => {
+      const t = messageContentText(m);
+      const body = t.length > MAX_PER ? `${t.slice(0, MAX_PER)} …[truncated]` : t;
+      return `[${roleOf(m)}] ${body}`;
+    })
+    .join('\n\n')
+    .slice(0, 12000);
+}
+
+// Deterministic fallback if the summarizer call fails — never overflow.
+function crudeSummary(messages: ConvMessage[]): string {
+  const lines = messages.map((m) => {
+    const t = messageContentText(m).replace(/\s+/g, ' ').trim();
+    return `- [${roleOf(m)}] ${t.slice(0, 200)}`;
+  });
+  return `(${messages.length} older steps; semantic summary unavailable)\n${lines.join('\n')}`;
+}
+
+/**
+ * Replace older turns with a single summary message to keep the conversation
+ * under the context window. Preserves the system + original user prompt and the
+ * most recent turns verbatim. Critically, the kept tail starts at a turn
+ * boundary (never an orphaned ToolMessage), so tool-call/result pairing stays
+ * valid for the model API.
+ */
+export async function compactConversation(
+  messages: ConvMessage[],
+  summarize: (text: string) => Promise<string>,
+  keepRecent: number = KEEP_RECENT_MESSAGES,
+): Promise<ConvMessage[]> {
+  if (messages.length <= 2 + keepRecent) return messages;
+
+  // Advance the tail start past any ToolMessages so the tail begins cleanly.
+  let split = Math.max(2, messages.length - keepRecent);
+  while (split < messages.length && messages[split] instanceof ToolMessage) split++;
+
+  const oldPart = messages.slice(2, split);
+  if (oldPart.length === 0) return messages;
+  const tail = messages.slice(split);
+
+  let summaryText: string;
+  try {
+    summaryText = await summarize(renderForSummary(oldPart));
+  } catch {
+    summaryText = crudeSummary(oldPart);
+  }
+
+  return [
+    messages[0]!,
+    messages[1]!,
+    new HumanMessage(`## Progress so far (older steps compacted to save context)\n\n${summaryText}`),
+    ...tail,
+  ];
 }
