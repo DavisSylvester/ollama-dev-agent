@@ -399,10 +399,23 @@ curl -s https://ollama.com/api/tags -H "Authorization: Bearer $OLLAMA_API_KEY" \
 oda <prompt> [options]
 
 Options:
-  -d, --cwd <directory>     Working directory for the agent (default: cwd)
-  -i, --max-iter <number>   Max Ralph iterations per task (default: 5)
-  --no-prd-review           Skip PRD approval and auto-execute
+  -d, --cwd <directory>         Working directory for the agent (default: cwd)
+  -i, --max-iter <number>       Max Ralph iterations per task (default: 5)
+  --no-prd-review               Skip PRD approval and auto-execute
+  --prd-file <path>             Use an existing PRD instead of generating one
+  --planner-model <model>       Override the planner model for this run
+  --coder-model <model>         Override the worker/coder model for this run
+  --editor-model <model>        Override the reviewer/editor model for this run
+  --base-url <url>              Override the Ollama base URL
+  --cloud                       Target Ollama Cloud (https://ollama.com)
+  --no-research                 Disable web-search planning (fast single-shot PRD)
+  --planner-max-steps <number>  Override the planner research step budget
+  --max-react-steps <number>    Override the worker ReAct step budget
 ```
+
+CLI flags override the corresponding `.env` values for that run. The Ollama Cloud
+API key is **never** a CLI argument — it always comes from `OLLAMA_API_KEY` in the
+environment.
 
 **Examples:**
 
@@ -415,6 +428,13 @@ oda "Add pagination to the users endpoint" --cwd ../my-api
 
 # Run fully automated (no approval prompt)
 oda "Fix the failing tests" --no-prd-review
+
+# Run against Ollama Cloud with specific cloud models
+oda "build a notes API" --cloud \
+  --planner-model gpt-oss:120b --coder-model qwen3-coder:480b --editor-model gpt-oss:120b
+
+# Skip web-search planning for a fast single-shot PRD
+oda "add a health endpoint" --no-research
 
 # Limit iterations per task
 oda "Refactor the store module" --max-iter 3

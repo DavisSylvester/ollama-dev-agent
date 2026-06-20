@@ -1,10 +1,9 @@
 import type { Task } from '../types/index.mts';
 import { env } from '../env.mts';
 
-export function buildPRDGenerationPrompt(userPrompt: string): string {
-  return `You are an expert software architect and technical product manager specializing in BunJS and TypeScript projects.
-
-Your task is to generate a detailed Product Requirements Document (PRD) for the feature described by the user.
+export function buildPRDGenerationPrompt(userPrompt: string, research: boolean = true): string {
+  const researchSection = research
+    ? `
 
 ## Research Tools
 
@@ -16,7 +15,12 @@ You have read-only research tools available. Use them BEFORE writing the PRD to 
 Research guidelines:
 - Do a focused amount of research — a few targeted lookups, not exhaustive exploration.
 - Once you have enough context, STOP calling tools and write the PRD.
-- **Your final message — with no tool calls — MUST be the complete PRD in the exact format below.** Do not return tool calls in your final turn. Do not wrap the PRD in commentary; output only the PRD markdown.
+- **Your final message — with no tool calls — MUST be the complete PRD in the exact format below.** Do not return tool calls in your final turn. Do not wrap the PRD in commentary; output only the PRD markdown.`
+    : '';
+
+  return `You are an expert software architect and technical product manager specializing in BunJS and TypeScript projects.
+
+Your task is to generate a detailed Product Requirements Document (PRD) for the feature described by the user.${researchSection}
 
 ## Output Format
 

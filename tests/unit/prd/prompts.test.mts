@@ -48,6 +48,20 @@ describe('buildPRDGenerationPrompt', () => {
     const prompt = buildPRDGenerationPrompt('anything');
     expect(prompt).toContain('.mts');
   });
+
+  it('includes the research-tools section by default', () => {
+    const prompt = buildPRDGenerationPrompt('anything');
+    expect(prompt).toContain('Research Tools');
+    expect(prompt).toContain('web_search_ddg');
+  });
+
+  it('omits the research-tools section when research is disabled', () => {
+    const prompt = buildPRDGenerationPrompt('anything', false);
+    expect(prompt).not.toContain('Research Tools');
+    expect(prompt).not.toContain('web_search_ddg');
+    // Still a valid PRD prompt
+    expect(prompt).toContain('TASK-001');
+  });
 });
 
 // ---------------------------------------------------------------------------

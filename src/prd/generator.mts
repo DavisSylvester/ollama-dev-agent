@@ -21,10 +21,13 @@ export async function generatePRD(
   deps?: PRDGeneratorDeps,
 ): Promise<PRD> {
   const runAgent = deps?.runAgentFn ?? runReactAgent;
+  const research = env.RESEARCH_PLANNING;
   const model = createChatModel(env.PLANNER_MODEL);
-  const tools = createPlannerTools(workingDirectory, env.BRAVE_API_KEY);
+  // Research mode gives the planner read-only tools; otherwise a tool-less
+  // single-shot call (the ReAct loop returns on the first tool-less answer).
+  const tools = research ? createPlannerTools(workingDirectory, env.BRAVE_API_KEY) : [];
 
-  const systemPrompt = buildPRDGenerationPrompt(userPrompt);
+  const systemPrompt = buildPRDGenerationPrompt(userPrompt, research);
 
   const rawMarkdown = await runAgent(
     model,

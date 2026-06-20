@@ -11,6 +11,12 @@ const envSchema = z.object({
   MAX_REACT_STEPS: z.coerce.number().int().min(5).max(100).default(20),
   REVIEWER_MAX_STEPS: z.coerce.number().int().min(3).max(20).default(8),
   PLANNER_MAX_STEPS: z.coerce.number().int().min(5).max(50).default(15),
+  // Web-search-enabled planning. Disable for a fast single-shot PRD call.
+  // Only the literal "false" / "0" turns it off (avoids the z.coerce.boolean truthiness trap).
+  RESEARCH_PLANNING: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
   NUM_CTX: z.coerce.number().int().min(2048).default(32768),
   BRAVE_API_KEY: z.string().optional(),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
@@ -29,3 +35,17 @@ function loadEnv(): Env {
 }
 
 export const env = loadEnv();
+
+/**
+ * Apply runtime overrides (e.g. from CLI flags) onto the loaded env singleton.
+ * Only defined values are applied. Consumers read `env.*` at call-time, so
+ * overriding here before the agent runs propagates everywhere.
+ */
+export function applyEnvOverrides(overrides: { [K in keyof Env]?: Env[K] | undefined }): void {
+  const target = env as Record<string, unknown>;
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value !== undefined) {
+      target[key] = value;
+    }
+  }
+}
