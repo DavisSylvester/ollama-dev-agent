@@ -13,6 +13,7 @@ export { createRunLinterTool } from './run-linter.mts';
 export { createInstallPackageTool } from './install-package.mts';
 export { createWebSearchDDGTool } from './web-search-ddg.mts';
 export { createWebSearchBraveTool } from './web-search-brave.mts';
+export { createTodoTools } from './todo.mts';
 
 import { createFileReadTool } from './file-read.mts';
 import { createFileWriteTool } from './file-write.mts';
@@ -27,6 +28,7 @@ import { createRunLinterTool } from './run-linter.mts';
 import { createInstallPackageTool } from './install-package.mts';
 import { createWebSearchDDGTool } from './web-search-ddg.mts';
 import { createWebSearchBraveTool } from './web-search-brave.mts';
+import { createTodoTools } from './todo.mts';
 
 export function createWorkerTools(
   workingDirectory: string,
@@ -46,6 +48,7 @@ export function createWorkerTools(
     createInstallPackageTool(workingDirectory),
     createWebSearchDDGTool(),
     createWebSearchBraveTool(braveApiKey),
+    ...createTodoTools(),
   ];
 }
 

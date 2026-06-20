@@ -233,10 +233,11 @@ You have a hard limit of **${stepBudget} steps** for this task. Spend them wisel
 ## Instructions
 
 ${step1}
-2. Implement the task fully — use \`write_file\` to create or overwrite files. Do NOT hesitate; start writing immediately.
-3. Run the test command: \`${task.testCommand}\`
-4. If tests fail, fix with \`write_file\` or \`edit_file\` and re-run once.
-5. Do NOT declare the task complete until the test command passes.
+2. For a multi-step task, call \`todo_write\` first to break it into a short checklist, then keep it updated (mark steps \`in_progress\`/\`done\`) as you go. Skip this for trivial single-file tasks.
+3. Implement the task fully — use \`write_file\` to create or overwrite files. Do NOT hesitate; start writing immediately.
+4. Run the test command: \`${task.testCommand}\`
+5. If tests fail, fix with \`write_file\` or \`edit_file\` and re-run once.
+6. Do NOT declare the task complete until the test command passes.
 
 > **Note**: Linting is performed automatically after your implementation completes. You do not need to call \`run_linter\` — it runs as part of the workflow.
 
