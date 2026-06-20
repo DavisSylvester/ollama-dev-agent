@@ -55,6 +55,35 @@ export async function appendEntry(category: KBCategory, entry: KBEntry): Promise
   }
 }
 
+// A project-agnostic, one-line description of the situation a category covers —
+// used as the generalized_prompt so a lesson's applicability transfers cleanly.
+const CATEGORY_SITUATION: Record<KBCategory, string> = {
+  ui: 'Building a UI component or page (forms, standalone components, state).',
+  api: 'Implementing an HTTP API endpoint or server layer.',
+  database: 'Implementing a data persistence or repository layer.',
+  auth: 'Integrating authentication or identity-management operations.',
+};
+
+export function generalizePrompt(category: KBCategory): string {
+  return CATEGORY_SITUATION[category];
+}
+
+// Strip run-specific details from resolution text so the remaining guidance is
+// reusable across projects: file paths, line:col positions, task IDs, and
+// "iteration N" references all become generic.
+export function generalizeText(text: string): string {
+  if (!text) return text;
+  return text
+    // relative file paths ending in a code/config extension → <file>
+    .replace(/\b[\w./\\-]+\.(mts|tsx?|jsx?|json|scss|css|html)\b/g, '<file>')
+    .replace(/\bTASK-\d+\b/gi, 'the task')
+    .replace(/\biteration\s+\d+\b/gi, 'an iteration')
+    .replace(/\b\d+:\d+\b/g, '') // line:col
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/ +\n/g, '\n')
+    .trim();
+}
+
 // Heuristic mapping of a task to a knowledge-base category, based on its name
 // and description. Order matters: auth is checked last so generic terms don't
 // shadow database/api/ui signals.
@@ -90,7 +119,10 @@ export function formatForPrompt(kb: KnowledgeBase, primary: KBCategory): string 
       .slice(-10) // most recent 10 per category keeps the prompt bounded
       .map((e) => {
         const model = e.model ? ` _(model: ${e.model})_` : '';
-        return `- **Issue**: ${e.issue}\n  **Resolution**: ${e.resolution || 'unresolved'}${model}`;
+        // Feed the GENERALIZED lesson — it transfers across projects. Fall back
+        // to the actual resolution if a generalized one isn't present.
+        const lesson = e.generalized_resolution || e.actual_resolution || 'unresolved';
+        return `- **Issue**: ${e.issue}\n  **Lesson**: ${lesson}${model}`;
       });
     sections.push(`### ${category.toUpperCase()}\n${lines.join('\n')}`);
   }

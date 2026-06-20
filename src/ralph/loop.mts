@@ -5,7 +5,7 @@ import { runWorker } from './worker.mts';
 import { runReviewer } from './reviewer.mts';
 import { runLint, type LintResult } from '../tools/run-linter.mts';
 import { REACT_TIMEOUT_SENTINEL } from '../models/react-agent.mts';
-import { appendEntry, categorizeTask } from '../knowledge-base/index.mts';
+import { appendEntry, categorizeTask, generalizePrompt, generalizeText } from '../knowledge-base/index.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 import { DateTime } from 'luxon';
@@ -250,6 +250,8 @@ export class RalphLoop {
           `Fix the ESLint violations:\n${lintResult.output.slice(0, 600)}`,
           iteration,
           'lint',
+          // Generalized lesson: the recurring ESLint rule classes, not the specific files.
+          `Run ESLint and fix all violations before finishing. Common classes: remove unused imports/vars, use \`import type\` for type-only imports, add explicit return types, and use the project's required file extension on imports.`,
         );
         issuesLogged++;
         task.iterationCount = iteration;
@@ -360,18 +362,30 @@ export class RalphLoop {
   // Append ONE issue → resolution record to the global knowledge base, flushed
   // immediately so nothing is lost on long or interrupted runs.
   // All path-like strings are relativized — the KB NEVER stores absolute paths.
+  // Records both the actual (run-specific) and generalized (reusable) text.
+  // `generalizedResolution` defaults to a stripped-down version of the actual.
   private async logIssue(
     task: Task,
     issue: string,
-    resolution: string,
+    actualResolution: string,
     iteration: number,
     status: string,
+    generalizedResolution?: string,
   ): Promise<void> {
-    await appendEntry(categorizeTask(task), {
-      issue: toRelativePaths(issue, this.workingDirectory),
-      prompt: toRelativePaths(`${task.name}: ${task.description}`, this.workingDirectory),
+    const wd = this.workingDirectory;
+    const relResolution = toRelativePaths(actualResolution, wd);
+    const generalized = generalizedResolution
+      ? toRelativePaths(generalizedResolution, wd)
+      : generalizeText(relResolution);
+    const category = categorizeTask(task);
+
+    await appendEntry(category, {
+      issue: toRelativePaths(issue, wd),
+      actual_prompt: toRelativePaths(`${task.name}: ${task.description}`, wd),
+      actual_resolution: relResolution,
+      generalized_prompt: generalizePrompt(category),
+      generalized_resolution: generalized,
       model: env.CODER_MODEL,
-      resolution: toRelativePaths(resolution, this.workingDirectory),
       metadata: {
         taskId: task.id,
         iterations: iteration,
