@@ -74,11 +74,26 @@ describe('runLint', () => {
     expect(execaCalls[0]!.args).toContain('--fix');
   });
 
-  it('targets eslint with the project source glob', async () => {
+  it('reports clean when eslint finds no matching files (monorepo / empty layout)', async () => {
+    execaImpl = async () => ({
+      exitCode: 1,
+      all: 'Oops! Something went wrong! :(\n\nESLint: 9.39.4\n\nNo files matching the pattern "**/*.{mts,tsx}" were found.',
+      stdout: '',
+      stderr: '',
+    });
+
+    const result = await runLint('/some/dir', false);
+
+    // "no files matched" is not a code-quality failure — must not block.
+    expect(result.clean).toBe(true);
+    expect(result.output).toBe('No lint-eligible files found.');
+  });
+
+  it('targets eslint with a recursive source glob (covers monorepos)', async () => {
     await runLint('/some/dir', false);
 
     expect(execaCalls[0]!.args[0]).toBe('eslint');
-    expect(execaCalls[0]!.args).toContain('src/**/*.{mts,tsx}');
+    expect(execaCalls[0]!.args).toContain('**/*.{mts,tsx}');
   });
 
   it('treats a thrown execution error as not clean', async () => {

@@ -8,9 +8,21 @@ export interface LintResult {
   readonly output: string;
 }
 
+// Glob covers both flat projects (top-level src/) and monorepos
+// (libs/*/src, apps/*/src). ESLint ignores node_modules by default, so the
+// recursive ** does not descend into dependencies.
+const LINT_GLOB = '**/*.{mts,tsx}';
+
+// ESLint exits non-zero when the glob matches no files. That is NOT a code
+// quality failure — there is simply nothing to lint (e.g. early tasks, or a
+// layout the glob doesn't cover) — so we treat it as clean.
+function isNoFilesMatched(output: string): boolean {
+  return /No files matching the pattern/i.test(output);
+}
+
 export async function runLint(workingDirectory: string, fix: boolean): Promise<LintResult> {
   try {
-    const args = ['eslint', 'src/**/*.{mts,tsx}'];
+    const args = ['eslint', LINT_GLOB];
     if (fix) {
       args.push('--fix');
     }
@@ -22,6 +34,11 @@ export async function runLint(workingDirectory: string, fix: boolean): Promise<L
     });
 
     const output = proc.all ?? `${proc.stdout}\n${proc.stderr}`.trim();
+
+    if (isNoFilesMatched(output)) {
+      return { clean: true, output: 'No lint-eligible files found.' };
+    }
+
     const outputText = output || 'No lint issues found.';
     const clean = proc.exitCode === 0;
 
