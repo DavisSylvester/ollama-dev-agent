@@ -100,6 +100,7 @@ const { waitUntilExit } = render(
   React.createElement(App, {
     version: '0.1.0',
     onAgentStart: startAgent,
+    autoApprove: !opts.prdReview,
   }),
 );
 

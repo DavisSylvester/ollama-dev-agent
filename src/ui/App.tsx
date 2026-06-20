@@ -10,6 +10,10 @@ import type { Task, AgentPhase, PRD } from '../types/index.mts';
 interface AppProps {
   readonly version: string;
   readonly onAgentStart: () => void;
+  // When true, the PRD is auto-approved and the interactive PRD preview is
+  // never mounted — required for non-interactive / non-TTY runs where Ink's
+  // useInput would throw "Raw mode is not supported".
+  readonly autoApprove?: boolean;
 }
 
 interface UIState {
@@ -38,7 +42,7 @@ const INITIAL_STATE: UIState = {
   error: null,
 };
 
-export function App({ version, onAgentStart }: AppProps): React.ReactElement {
+export function App({ version, onAgentStart, autoApprove = false }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const [state, setState] = useState<UIState>(INITIAL_STATE);
 
@@ -173,7 +177,10 @@ export function App({ version, onAgentStart }: AppProps): React.ReactElement {
     );
   }
 
-  if (state.phase === 'awaiting_approval' && state.prd) {
+  // Only mount the interactive PRD preview when a human review is expected.
+  // With autoApprove (--no-prd-review), index.mts approves via an event and we
+  // must NOT mount PRDPreview — its useInput throws in non-TTY environments.
+  if (state.phase === 'awaiting_approval' && state.prd && !autoApprove) {
     return (
       <PRDPreview
         prd={state.prdMarkdown}
