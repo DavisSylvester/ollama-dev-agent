@@ -89,7 +89,43 @@ describe('runLint', () => {
     expect(result.output).toBe('No lint-eligible files found.');
   });
 
-  it('targets eslint with a recursive source glob (covers monorepos)', async () => {
+  it('lints only the supplied files when a file list is given', async () => {
+    await runLint('/some/dir', false, [
+      'libs/auth0-mgmt/src/create-user.mts',
+      'apps/ui/src/app/app.component.tsx',
+    ]);
+
+    expect(execaCalls[0]!.args[0]).toBe('eslint');
+    expect(execaCalls[0]!.args).toContain('libs/auth0-mgmt/src/create-user.mts');
+    expect(execaCalls[0]!.args).toContain('apps/ui/src/app/app.component.tsx');
+    // Must NOT fall back to the whole-repo glob
+    expect(execaCalls[0]!.args).not.toContain('**/*.{mts,tsx}');
+  });
+
+  it('filters non-lint-eligible files from the supplied list', async () => {
+    await runLint('/some/dir', false, [
+      'libs/x/src/a.mts',
+      'package.json',
+      'README.md',
+      'libs/x/src/b.tsx',
+    ]);
+
+    const passed = execaCalls[0]!.args.slice(1); // drop "eslint"
+    expect(passed).toContain('libs/x/src/a.mts');
+    expect(passed).toContain('libs/x/src/b.tsx');
+    expect(passed).not.toContain('package.json');
+    expect(passed).not.toContain('README.md');
+  });
+
+  it('returns clean without running eslint when no eligible files changed', async () => {
+    const result = await runLint('/some/dir', false, ['package.json', 'bun.lock']);
+
+    expect(result.clean).toBe(true);
+    expect(result.output).toBe('No lint-eligible files changed.');
+    expect(execaCalls).toHaveLength(0); // eslint never invoked
+  });
+
+  it('falls back to a recursive source glob when no file list is given', async () => {
     await runLint('/some/dir', false);
 
     expect(execaCalls[0]!.args[0]).toBe('eslint');

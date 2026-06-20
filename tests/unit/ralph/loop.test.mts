@@ -458,6 +458,36 @@ describe('RalphLoop.runTask — lint gate', () => {
     expect(reviewerCalled).toBe(true);
   });
 
+  it('lints only the files the worker wrote this iteration', async () => {
+    const task = makeTask();
+    let lintedFiles: readonly string[] | undefined;
+
+    const deps: RalphRunnerDeps = {
+      workerFn: async (params) => {
+        // Simulate the worker writing/editing some files and reading another.
+        params.onToolCall?.('write_file', { path: 'libs/auth0-mgmt/src/create-user.mts', content: 'x' });
+        params.onToolCall?.('edit_file', { path: 'apps/api/src/index.mts', old_text: 'a', new_text: 'b' });
+        params.onToolCall?.('read_file', { path: 'package.json' });
+        return 'output';
+      },
+      reviewerFn: async () => makeShipDecision(),
+      // Capture the file list passed to the *check* pass (fix === false).
+      lintFn: async (_dir, fix, files) => {
+        if (fix === false) lintedFiles = files;
+        return { clean: true, output: 'No lint issues found.' };
+      },
+    };
+
+    await loop.runTask(task, NO_TOOLS, undefined, deps);
+
+    expect(lintedFiles).toEqual([
+      'libs/auth0-mgmt/src/create-user.mts',
+      'apps/api/src/index.mts',
+    ]);
+    // read_file targets must NOT be linted
+    expect(lintedFiles).not.toContain('package.json');
+  });
+
   it('fails the task when every iteration fails lint', async () => {
     const task = makeTask();
     let reviewerCalled = false;

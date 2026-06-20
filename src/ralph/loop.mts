@@ -180,10 +180,13 @@ export class RalphLoop {
       // --- Mandatory lint gate ---
       // This runs unconditionally after every Worker iteration.
       // The Reviewer is NEVER called if lint has unfixable errors.
+      // Scope the lint to the files THIS worker wrote/edited this iteration, so
+      // parallel tasks aren't held responsible for each other's lint state.
+      const changedFiles = extractChangedFiles(toolCallLog);
       let lintResult: LintResult;
       try {
-        await lint(this.workingDirectory, true);               // auto-fix in-place
-        lintResult = await lint(this.workingDirectory, false); // detect remaining errors
+        await lint(this.workingDirectory, true, changedFiles);               // auto-fix in-place
+        lintResult = await lint(this.workingDirectory, false, changedFiles); // detect remaining errors
       } catch (err) {
         lintResult = { clean: false, output: String(err) };    // execution failure = lint failure
       }
@@ -306,6 +309,21 @@ interface ToolCallEntry {
   readonly step: number;
   readonly toolName: string;
   readonly args: Record<string, unknown>;
+}
+
+// Collect the distinct file paths the worker wrote or edited this iteration,
+// so the lint gate can be scoped to exactly those files.
+function extractChangedFiles(log: ToolCallEntry[]): string[] {
+  const files = new Set<string>();
+  for (const entry of log) {
+    if (entry.toolName === 'write_file' || entry.toolName === 'edit_file') {
+      const path = entry.args['path'];
+      if (typeof path === 'string' && path.length > 0) {
+        files.add(path);
+      }
+    }
+  }
+  return [...files];
 }
 
 function formatDuration(ms: number): string {
