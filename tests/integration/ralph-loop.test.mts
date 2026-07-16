@@ -29,6 +29,7 @@ const simpleTask: Task = {
   acceptanceCriteria: 'File exists at hello.ts, exports greet function, returns correct string',
   testCommand: 'bun test',
   dependsOn: [],
+  domain: 'services',
   status: 'pending',
   iterationCount: 0,
 };

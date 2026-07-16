@@ -6,6 +6,7 @@ import { runReviewer } from './reviewer.mts';
 import { runLint, type LintResult } from '../tools/run-linter.mts';
 import { REACT_TIMEOUT_SENTINEL } from '../models/react-agent.mts';
 import { appendEntry, categorizeTask, generalizePrompt, generalizeText } from '../knowledge-base/index.mts';
+import { isTransientOllamaError } from '../models/index.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 import { DateTime } from 'luxon';
@@ -392,6 +393,14 @@ export class RalphLoop {
     status: string,
     generalizedResolution?: string,
   ): Promise<void> {
+    // A transient connectivity/infra failure (a dropped Ollama call, lint
+    // tooling crashing) is noise, not a reusable lesson — recording it pollutes
+    // the KB the worker reads. With 3.6's retry, these rarely reach here anyway.
+    if (isTransientOllamaError(new Error(`${issue}\n${actualResolution}`))) {
+      logger.debug({ taskId: task.id, status }, 'kb.skip_transient_issue');
+      return;
+    }
+
     const wd = this.workingDirectory;
     const relResolution = toRelativePaths(actualResolution, wd);
     const generalized = generalizedResolution

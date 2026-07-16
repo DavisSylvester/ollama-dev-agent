@@ -1,3 +1,6 @@
+import type { TaskSize } from './task-size.mts';
+import type { TaskDomain } from './task-domain.mts';
+
 export interface Task {
   readonly id: string;
   readonly name: string;
@@ -5,11 +8,19 @@ export interface Task {
   readonly acceptanceCriteria: string;
   readonly testCommand: string;
   readonly dependsOn: readonly string[];
+  // Functional area. Defaults to 'services' with a warning if the drafter omits it.
+  readonly domain: TaskDomain;
+  // T-shirt size assigned by the sizer. Absent until size_plan runs.
+  size?: TaskSize;
   status: TaskStatus;
   iterationCount: number;
   // How many times this task's lineage has been auto-split (0 = original task).
   // Caps recursive splitting when a task repeatedly fails.
   splitDepth?: number;
+  // Wall-clock timestamps for the progress board. startedAt is stamped when the
+  // task enters in_progress; completedAt when it reaches complete/failed.
+  startedAt?: string | null;
+  completedAt?: string | null;
 }
 
 export type TaskStatus = 'pending' | 'in_progress' | 'complete' | 'failed';

@@ -1,4 +1,13 @@
 import { z } from 'zod';
+import { config as loadDotenv } from 'dotenv';
+import { join } from 'node:path';
+
+// Load THIS package's .env regardless of the process cwd. Without this, the
+// global `oda` command run from another directory falls back to schema defaults
+// (local ollama + qwen3-coder/devstral), ignoring the configured cloud models.
+// override:true so ODA's own config wins over a stray .env in the invocation dir.
+// CLI flags still take precedence — they are applied after via applyEnvOverrides.
+loadDotenv({ path: join(import.meta.dir, '..', '.env'), override: true });
 
 const envSchema = z.object({
   OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),
@@ -26,6 +35,26 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
+  // Deterministic sizing floor: a task is force-promoted to `L` (must split)
+  // when it has more than this many discrete acceptance-criteria clauses,
+  // regardless of the model's own guess. Kept conservative so the floor defers
+  // to the model except on unambiguous over-sizing.
+  SIZE_MAX_CRITERIA: z.coerce.number().int().min(1).max(20).default(4),
+  // When false, an unsplittable `L` warns instead of hard-stopping the run.
+  SIZE_ENFORCE_GATE: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
+  // Per-persona model overrides for the L-task debate forum. Unset => the
+  // resolver falls back to the tiered defaults (SA/SME => PLANNER, Scrum/Dev
+  // => CODER). Kept optional so zero config is required.
+  DEBATE_ARCHITECT_MODEL: z.string().optional(),
+  DEBATE_SME_MODEL: z.string().optional(),
+  DEBATE_SCRUM_MODEL: z.string().optional(),
+  DEBATE_DEV_MODEL: z.string().optional(),
+  // Max debate rounds before the Solution Architect decides unilaterally.
+  // Hard-capped at 4 by product decision.
+  DEBATE_MAX_ROUNDS: z.coerce.number().int().min(1).max(4).default(4),
   NUM_CTX: z.coerce.number().int().min(2048).default(32768),
   BRAVE_API_KEY: z.string().optional(),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),

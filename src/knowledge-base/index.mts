@@ -13,14 +13,14 @@ function kbDir(): string {
   return process.env['ODA_KB_DIR'] ?? DEFAULT_KB_DIR;
 }
 
-const CATEGORIES: readonly KBCategory[] = ['ui', 'api', 'database', 'auth'];
+const CATEGORIES: readonly KBCategory[] = ['ui', 'api', 'database', 'auth', 'terraform', 'github-actions'];
 
 function categoryFile(category: KBCategory): string {
   return resolve(kbDir(), `${category}.json`);
 }
 
 function emptyKnowledgeBase(): KnowledgeBase {
-  return { ui: [], api: [], database: [], auth: [] };
+  return { ui: [], api: [], database: [], auth: [], terraform: [], 'github-actions': [] };
 }
 
 async function readCategory(category: KBCategory): Promise<KBEntry[]> {
@@ -42,10 +42,29 @@ export async function loadKnowledgeBase(): Promise<KnowledgeBase> {
   return kb;
 }
 
+// A normalized signature for an entry, used to suppress duplicates. The same
+// lesson (issue + generalized resolution) gets logged on every revise iteration
+// across every task and run; without dedup it floods the recent-N window fed to
+// the worker and crowds out diverse lessons.
+function dedupKey(entry: KBEntry): string {
+  return `${entry.issue}::${entry.generalized_resolution}`
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export async function appendEntry(category: KBCategory, entry: KBEntry): Promise<void> {
   try {
     await mkdir(kbDir(), { recursive: true });
     const existing = await readCategory(category);
+
+    // Skip if an equivalent lesson is already recorded for this category.
+    const key = dedupKey(entry);
+    if (existing.some((e) => dedupKey(e) === key)) {
+      logger.debug({ category, issue: entry.issue.slice(0, 80) }, 'kb.entry_deduped');
+      return;
+    }
+
     existing.push(entry);
     await writeFile(categoryFile(category), JSON.stringify(existing, null, 2), 'utf-8');
     logger.info({ category, issue: entry.issue.slice(0, 80) }, 'kb.entry_logged');
@@ -62,6 +81,8 @@ const CATEGORY_SITUATION: Record<KBCategory, string> = {
   api: 'Implementing an HTTP API endpoint or server layer.',
   database: 'Implementing a data persistence or repository layer.',
   auth: 'Integrating authentication or identity-management operations.',
+  terraform: 'Authoring Terraform / IaC to provision cloud infrastructure.',
+  'github-actions': 'Authoring a GitHub Actions workflow or CI/CD pipeline.',
 };
 
 export function generalizePrompt(category: KBCategory): string {
@@ -89,6 +110,14 @@ export function generalizeText(text: string): string {
 // shadow database/api/ui signals.
 export function categorizeTask(task: Task): KBCategory {
   const text = `${task.name} ${task.description}`.toLowerCase();
+  // CI/CD and IaC are the most specific domains — check them first so generic
+  // words ("deploy", "service") don't shadow them into api/auth.
+  if (/\b(github actions?|workflow|workflows|ci\/cd|\bcicd\b|pipeline|runner|reusable workflow|composite action|workflow_dispatch|workflow_call|\.github)\b/.test(text)) {
+    return 'github-actions';
+  }
+  if (/\b(terraform|opentofu|\.tf\b|tfvars|tfstate|hcl|required_providers|azurerm|provider block|infrastructure as code|\biac\b|provision(ing)?)\b/.test(text)) {
+    return 'terraform';
+  }
   if (/\b(angular|component|\bui\b|frontend|scss|template|form|page|signal)\b/.test(text)) {
     return 'ui';
   }
@@ -106,34 +135,67 @@ export function categorizeTask(task: Task): KBCategory {
   return 'api';
 }
 
-// Build the prompt section fed to the worker each iteration. Includes the task's
-// own category first (most relevant), then any other categories with entries.
+// A "resolved" entry records the exact fix that shipped a task — a positive,
+// few-shot template worth imitating. Everything else (revise/failed/timeout/
+// anti-pattern) is a pitfall to avoid. Splitting them lets the worker prompt
+// lead with what WORKED rather than burying it among failures.
+function isProvenSolution(entry: KBEntry): boolean {
+  return (entry.metadata.status ?? '').toLowerCase() === 'resolved';
+}
+
+function renderEntries(entries: KBEntry[], cap: number): string[] {
+  return entries.slice(-cap).map((e) => {
+    const model = e.model ? ` _(model: ${e.model})_` : '';
+    // Feed the GENERALIZED lesson — it transfers across projects. Fall back to
+    // the actual resolution if a generalized one isn't present.
+    const lesson = e.generalized_resolution || e.actual_resolution || 'unresolved';
+    return `- **Situation**: ${e.issue}\n  **Lesson**: ${lesson}${model}`;
+  });
+}
+
+// Build the prompt section fed to the worker each iteration. The task's own
+// category comes first (most relevant), then any other categories with entries.
+// Within each category, proven solutions are surfaced separately from pitfalls.
 export function formatForPrompt(kb: KnowledgeBase, primary: KBCategory): string {
   const ordered: KBCategory[] = [primary, ...CATEGORIES.filter((c) => c !== primary)];
-  const sections: string[] = [];
+
+  const provenSections: string[] = [];
+  const pitfallSections: string[] = [];
 
   for (const category of ordered) {
     const entries = kb[category];
     if (!entries || entries.length === 0) continue;
-    const lines = entries
-      .slice(-10) // most recent 10 per category keeps the prompt bounded
-      .map((e) => {
-        const model = e.model ? ` _(model: ${e.model})_` : '';
-        // Feed the GENERALIZED lesson — it transfers across projects. Fall back
-        // to the actual resolution if a generalized one isn't present.
-        const lesson = e.generalized_resolution || e.actual_resolution || 'unresolved';
-        return `- **Issue**: ${e.issue}\n  **Lesson**: ${lesson}${model}`;
-      });
-    sections.push(`### ${category.toUpperCase()}\n${lines.join('\n')}`);
+
+    const proven = entries.filter(isProvenSolution);
+    const pitfalls = entries.filter((e) => !isProvenSolution(e));
+
+    if (proven.length > 0) {
+      provenSections.push(`### ${category.toUpperCase()}\n${renderEntries(proven, 5).join('\n')}`);
+    }
+    if (pitfalls.length > 0) {
+      pitfallSections.push(`### ${category.toUpperCase()}\n${renderEntries(pitfalls, 8).join('\n')}`);
+    }
   }
 
-  if (sections.length === 0) return '';
+  if (provenSections.length === 0 && pitfallSections.length === 0) return '';
 
-  return [
-    `## Known Issues & Resolutions (from prior runs)`,
-    ``,
-    `These problems were hit in past runs. Apply the resolutions proactively to avoid repeating them:`,
-    ``,
-    sections.join('\n\n'),
-  ].join('\n');
+  const out: string[] = [`## Lessons from prior runs`, ``];
+
+  if (provenSections.length > 0) {
+    out.push(
+      `### ✓ Proven solutions — approaches that successfully shipped similar tasks. Prefer these patterns:`,
+      ``,
+      provenSections.join('\n\n'),
+      ``,
+    );
+  }
+  if (pitfallSections.length > 0) {
+    out.push(
+      `### ⚠ Pitfalls — problems hit in past runs. Apply the resolutions proactively to avoid repeating them:`,
+      ``,
+      pitfallSections.join('\n\n'),
+    );
+  }
+
+  return out.join('\n').trimEnd();
 }

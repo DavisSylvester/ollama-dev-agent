@@ -4,6 +4,7 @@ import type { PRD } from './prd.mts';
 export type AgentPhase =
   | 'initializing'
   | 'generating_prd'
+  | 'sizing_plan'
   | 'awaiting_approval'
   | 'executing_tasks'
   | 'worker_running'
@@ -36,11 +37,14 @@ export interface AgentConfig {
   readonly maxIterations?: number;
   readonly maxReactSteps?: number;
   readonly prdFile?: string;
+  readonly fresh?: boolean;
 }
 
 export type AgentEventType =
   | 'phase_changed'
   | 'prd_generated'
+  | 'plan_sized'
+  | 'run_resumed'
   | 'prd_approved'
   | 'task_started'
   | 'task_complete'

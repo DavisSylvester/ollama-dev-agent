@@ -246,6 +246,7 @@ describe('saveTaskGoal', () => {
       acceptanceCriteria: 'Form submits to the API and shows errors.',
       testCommand: 'bun test create-user.test.mts',
       dependsOn: ['TASK-011'],
+      domain: 'ui',
       status: 'pending',
       iterationCount: 0,
     });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { splitTask, applySplit, canSplit, MAX_SPLIT_DEPTH } from '../../../src/prd/splitter.mts';
+import { splitTask, applySplit, canSplit, canSplitForSize, buildChildTasks, MAX_SPLIT_DEPTH } from '../../../src/prd/splitter.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -10,6 +10,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     acceptanceCriteria: 'server boots; /health 200; validation works',
     testCommand: 'bun test',
     dependsOn: [],
+    domain: 'api',
     status: 'failed',
     iterationCount: 4,
     ...overrides,
@@ -67,6 +68,67 @@ describe('splitTask', () => {
   it('returns [] when decomposition yields no tasks', async () => {
     const subs = await splitTask(makeTask(), '', { invokeFn: async () => 'no tasks here' });
     expect(subs).toEqual([]);
+  });
+});
+
+function parent(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 'TASK-003',
+    name: 'big task',
+    description: 'lots of work',
+    acceptanceCriteria: 'many things',
+    testCommand: 'bun test',
+    dependsOn: [],
+    domain: 'database',
+    status: 'pending',
+    iterationCount: 0,
+    ...overrides,
+  };
+}
+
+describe('splitTask — domain inheritance', () => {
+  it('gives every child the parent domain', async () => {
+    const children = await splitTask(parent(), '', {
+      invokeFn: async () =>
+        [
+          '- [ ] **TASK-1**: schema',
+          '  - **Description**: define schema',
+          '  - **Acceptance**: schema exists',
+          '  - **Test Command**: `bun test`',
+          '- [ ] **TASK-2**: repo',
+          '  - **Description**: build repo',
+          '  - **Acceptance**: repo works',
+          '  - **Test Command**: `bun test`',
+        ].join('\n'),
+    });
+    expect(children).toHaveLength(2);
+    expect(children.every((c) => c.domain === 'database')).toBe(true);
+    expect(children.every((c) => c.size === undefined)).toBe(true);
+  });
+});
+
+describe('canSplitForSize', () => {
+  it('allows splitting an original task', () => {
+    expect(canSplitForSize(parent())).toBe(true);
+  });
+  it('refuses once split depth is reached', () => {
+    expect(canSplitForSize(parent({ splitDepth: 1 }))).toBe(false);
+  });
+});
+
+describe('buildChildTasks', () => {
+  it('re-IDs children, inherits domain, and wires foundation-first deps', () => {
+    const p = parent({ id: 'TASK-007', dependsOn: ['TASK-001'] });
+    const children = buildChildTasks(p, [
+      { name: 'schema', description: 'ds', acceptanceCriteria: 'as' },
+      { name: 'repo', description: 'dr', acceptanceCriteria: 'ar' },
+    ]);
+    expect(children.map((c) => c.id)).toEqual(['TASK-007-1', 'TASK-007-2']);
+    expect(children.every((c) => c.domain === 'database')).toBe(true);
+    expect(children[0]!.dependsOn).toEqual(['TASK-001']); // inherits parent's external deps
+    expect(children[1]!.dependsOn).toEqual(['TASK-007-1']); // followers depend on the first
+    expect(children.every((c) => c.splitDepth === 1)).toBe(true);
+    expect(children.every((c) => c.size === undefined)).toBe(true); // re-sized later
   });
 });
 

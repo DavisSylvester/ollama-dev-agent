@@ -1,4 +1,5 @@
 import type { Task } from '../types/index.mts';
+import type { DebatePersona, ProposedStory, PersonaStance } from './debate.mts';
 import { env } from '../env.mts';
 
 export function buildPRDGenerationPrompt(userPrompt: string, research: boolean = true): string {
@@ -43,6 +44,7 @@ You MUST produce the PRD in EXACTLY this format — no deviations:
 
 ## Tasks
 - [ ] **TASK-001**: <task name>
+  - **Domain**: <one of: ui | api | services | database | auth | iac | e2e | ci>
   - **Description**: <what needs to be implemented>
   - **Acceptance**: <specific, measurable acceptance criteria>
   - **Test Command**: \`<bun test command or shell command to verify>\`
@@ -70,6 +72,23 @@ You MUST produce the PRD in EXACTLY this format — no deviations:
 - Use sequential numbering: TASK-001, TASK-002, TASK-003, ...
 - All implementation must target **BunJS** runtime with **TypeScript strict mode**
 - All source files use the \`.mts\` extension; imports must include the \`.mts\` extension
+
+## Functional Areas (Domains) — REQUIRED
+
+Partition the work **by functional area first**, then decompose each area into tasks. Every task MUST carry exactly ONE \`**Domain**\` tag from this closed set: ui, api, services, database, auth, iac, e2e, ci
+
+- \`ui\` — Angular components, views, styling
+- \`api\` — Elysia routes/controllers (transport only)
+- \`services\` — business logic / orchestration (storage-agnostic)
+- \`database\` — Mongo schemas, repositories, data access
+- \`auth\` — authentication / authorization
+- \`iac\` — Terraform / infrastructure
+- \`e2e\` — Playwright end-to-end tests
+- \`ci\` — GitHub Actions / pipelines
+
+Rules:
+- A task that would span **more than one** domain is too big — split it so each child is single-domain.
+- Do NOT invent domains outside this set.
 
 ## Task Sizing — CRITICAL
 
@@ -111,6 +130,130 @@ These are hard constraints — the planner must reflect them in tasks and Techni
 - **Package scope**: all internal libraries scoped to \`@davissylvester\` — never \`@oda\`, \`@local\`, or unscoped
 
 User prompt: ${userPrompt}`;
+}
+
+export function buildSizingPrompt(tasks: readonly Task[]): string {
+  const rows = tasks
+    .map(
+      (t) =>
+        `- ${t.id} [${t.domain}]: ${t.name}\n  Description: ${t.description}\n  Acceptance: ${t.acceptanceCriteria}`,
+    )
+    .join('\n');
+
+  return `You are the Story Sizer. You own exactly one question: does each task fit in a single builder agent's focused pass without exhausting its context?
+
+Assign each task a T-shirt size:
+- **S** — trivially one pass.
+- **M** — one pass, meaningful but bounded.
+- **L** — will NOT fit one pass; must be split.
+
+Judge by concrete signals: files/modules touched; count of schemas / ports / services / routes / components; whether it spans more than one concern or domain; unknowns. A task spanning many endpoints, many collections, or a whole feature's UI is almost always L.
+
+## Tasks to size
+${rows}
+
+## Output format — STRICT
+Output ONLY one line per task, nothing else:
+
+TASK-001: S
+TASK-002: M
+TASK-003: L
+
+Use the exact task ids above. Do not add commentary.`;
+}
+
+export const PERSONA_BRIEF: Record<DebatePersona, string> = {
+  scrum_master:
+    'the Scrum Master. You judge stories by INVEST — independent, negotiable, valuable, estimable, small, testable. You push for thin vertical slices.',
+  solution_architect:
+    'the Solution Architect. You judge technical decomposition and clean module boundaries. You hold the final decision.',
+  sme:
+    'the Subject Matter Expert. You judge domain correctness and whether the split fully covers the original acceptance criteria.',
+  developer:
+    'the Developer. You judge implementation feasibility — whether each story fits a single focused pass without exhausting context.',
+};
+
+function storiesBlock(stories: readonly ProposedStory[]): string {
+  return stories
+    .map(
+      (s, i) =>
+        `${i + 1}. ${s.name}\n   Description: ${s.description}\n   Acceptance: ${s.acceptanceCriteria}`,
+    )
+    .join('\n');
+}
+
+export function buildDebateProposalPrompt(task: Task): string {
+  return `You are the Solution Architect opening a design debate about an oversized (size L) task.
+
+## The oversized task
+${task.id} [${task.domain}]: ${task.name}
+Description: ${task.description}
+Acceptance: ${task.acceptanceCriteria}
+
+## Your job
+Propose an initial breakdown into 2 to 4 smaller stories, each completable in one focused pass (roughly one module plus its test). Together they MUST fully cover the original acceptance criteria, and every story stays within the "${task.domain}" domain.
+
+Output ONLY a JSON array, nothing else:
+
+[
+  { "name": "<short story name>", "description": "<one focused concern>", "acceptanceCriteria": "<specific, verifiable criteria>" }
+]`;
+}
+
+export function buildPersonaCritiquePrompt(
+  persona: DebatePersona,
+  task: Task,
+  proposal: readonly ProposedStory[],
+  round: number,
+): string {
+  return `You are ${PERSONA_BRIEF[persona]}
+
+This is round ${round} of a debate about how to break down an oversized task.
+
+## Original task
+${task.id} [${task.domain}]: ${task.name}
+Acceptance: ${task.acceptanceCriteria}
+
+## Current proposed breakdown
+${storiesBlock(proposal)}
+
+## Your job
+Critique THIS breakdown strictly from your perspective. Decide whether it is good enough to build ("agree") or still needs revision ("revise").
+
+Output ONLY a JSON object, nothing else:
+
+{ "verdict": "agree" | "revise", "comments": "<one or two sentences of specific critique>" }`;
+}
+
+export function buildDebateSynthesisPrompt(
+  task: Task,
+  proposal: readonly ProposedStory[],
+  stances: readonly PersonaStance[],
+): string {
+  const feedback = stances
+    .map((s) => `- ${s.persona} (${s.verdict}): ${s.comments}`)
+    .join('\n');
+
+  return `You are the Solution Architect. Revise the proposed breakdown using the panel's feedback.
+
+## Original task
+${task.id} [${task.domain}]: ${task.name}
+Acceptance: ${task.acceptanceCriteria}
+
+## Current proposed breakdown
+${storiesBlock(proposal)}
+
+## Panel feedback
+${feedback}
+
+## Your job
+Produce a revised breakdown of 2 to 4 stories that addresses the feedback, still fully covers the original acceptance criteria, and keeps every story single-pass and within the "${task.domain}" domain.
+
+Output ONLY a JSON array, nothing else:
+
+[
+  { "name": "<short story name>", "description": "<one focused concern>", "acceptanceCriteria": "<specific, verifiable criteria>" }
+]`;
 }
 
 export function buildWorkerPrompt(
@@ -224,11 +367,15 @@ You have a hard limit of **${stepBudget} steps** for this task. Spend them wisel
 |---|---|---|
 | Exploration | ${explorationBudget} | \`read_file\` only (listing already provided) |
 | Implementation | majority | \`write_file\`, \`edit_file\` |
-| Verification | 2–3 | \`run_tests\` |
+| Verification | 2–3 | \`shell_exec\` (test command only) |
 
 **If you exceed the step budget the task will fail and restart.** Do not call \`list_directory\` — the directory structure is already in this prompt.
 
 **One read per file:** Never call \`read_file\` on the same path twice. Once you have read a file, its content is in your context — use it from memory. Re-reading the same file wastes steps and will cause a timeout.
+
+**Reading & searching — use the dedicated tools, NOT the shell:** Inspect files only with \`read_file\`, \`glob_search\`, and \`grep_search\`. Do **NOT** use \`shell_exec\` to \`cat\`, \`type\`, \`ls\`, \`dir\`, \`find\`, or otherwise read/list/search files — it wastes steps and fails on shell-dialect mismatches.
+
+**Shell dialect:** \`shell_exec\` runs in **Windows cmd.exe**, not bash. Reserve it **only** for running the test command. If you ever must use it directly, use cmd syntax (\`type\`, \`2>nul\`) — never bash syntax (\`cat\`, \`2>/dev/null\`, \`&&\` chains of Unix tools). Do not guess between dialects across calls.
 
 ## Instructions
 

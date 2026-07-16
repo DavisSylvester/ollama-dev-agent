@@ -16,6 +16,8 @@ export const AgentStateAnnotation = Annotation.Root({
   phase: Annotation<AgentPhase>({ default: () => 'initializing' as AgentPhase, reducer: (_, b) => b }),
   error: Annotation<string | null>({ default: () => null, reducer: (_, b) => b }),
   completedTaskIds: Annotation<string[]>({ default: () => [], reducer: (a, b) => [...new Set([...a, ...b])] }),
+  resumed: Annotation<boolean>({ default: () => false, reducer: (_, b) => b }),
+  prdFile: Annotation<string | null>({ default: () => null, reducer: (_, b) => b }),
 });
 
 export type AgentStateType = typeof AgentStateAnnotation.State;
