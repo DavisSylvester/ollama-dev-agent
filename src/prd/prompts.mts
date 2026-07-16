@@ -224,11 +224,15 @@ You have a hard limit of **${stepBudget} steps** for this task. Spend them wisel
 |---|---|---|
 | Exploration | ${explorationBudget} | \`read_file\` only (listing already provided) |
 | Implementation | majority | \`write_file\`, \`edit_file\` |
-| Verification | 2–3 | \`run_tests\` |
+| Verification | 2–3 | \`shell_exec\` (test command only) |
 
 **If you exceed the step budget the task will fail and restart.** Do not call \`list_directory\` — the directory structure is already in this prompt.
 
 **One read per file:** Never call \`read_file\` on the same path twice. Once you have read a file, its content is in your context — use it from memory. Re-reading the same file wastes steps and will cause a timeout.
+
+**Reading & searching — use the dedicated tools, NOT the shell:** Inspect files only with \`read_file\`, \`glob_search\`, and \`grep_search\`. Do **NOT** use \`shell_exec\` to \`cat\`, \`type\`, \`ls\`, \`dir\`, \`find\`, or otherwise read/list/search files — it wastes steps and fails on shell-dialect mismatches.
+
+**Shell dialect:** \`shell_exec\` runs in **Windows cmd.exe**, not bash. Reserve it **only** for running the test command. If you ever must use it directly, use cmd syntax (\`type\`, \`2>nul\`) — never bash syntax (\`cat\`, \`2>/dev/null\`, \`&&\` chains of Unix tools). Do not guess between dialects across calls.
 
 ## Instructions
 
