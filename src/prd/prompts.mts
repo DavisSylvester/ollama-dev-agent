@@ -43,6 +43,7 @@ You MUST produce the PRD in EXACTLY this format — no deviations:
 
 ## Tasks
 - [ ] **TASK-001**: <task name>
+  - **Domain**: <one of: ui | api | services | database | auth | iac | e2e | ci>
   - **Description**: <what needs to be implemented>
   - **Acceptance**: <specific, measurable acceptance criteria>
   - **Test Command**: \`<bun test command or shell command to verify>\`
@@ -70,6 +71,23 @@ You MUST produce the PRD in EXACTLY this format — no deviations:
 - Use sequential numbering: TASK-001, TASK-002, TASK-003, ...
 - All implementation must target **BunJS** runtime with **TypeScript strict mode**
 - All source files use the \`.mts\` extension; imports must include the \`.mts\` extension
+
+## Functional Areas (Domains) — REQUIRED
+
+Partition the work **by functional area first**, then decompose each area into tasks. Every task MUST carry exactly ONE \`**Domain**\` tag from this closed set: ui, api, services, database, auth, iac, e2e, ci
+
+- \`ui\` — Angular components, views, styling
+- \`api\` — Elysia routes/controllers (transport only)
+- \`services\` — business logic / orchestration (storage-agnostic)
+- \`database\` — Mongo schemas, repositories, data access
+- \`auth\` — authentication / authorization
+- \`iac\` — Terraform / infrastructure
+- \`e2e\` — Playwright end-to-end tests
+- \`ci\` — GitHub Actions / pipelines
+
+Rules:
+- A task that would span **more than one** domain is too big — split it so each child is single-domain.
+- Do NOT invent domains outside this set.
 
 ## Task Sizing — CRITICAL
 

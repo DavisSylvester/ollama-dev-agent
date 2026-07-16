@@ -311,3 +311,11 @@ describe('buildWorkerPrompt — HTTP client rule', () => {
     expect(prompt).toContain('test files');
   });
 });
+
+describe('buildPRDGenerationPrompt — domain partitioning', () => {
+  it('instructs the drafter to tag every task with a Domain', () => {
+    const prompt = buildPRDGenerationPrompt('build a notes app', false);
+    expect(prompt).toContain('**Domain**');
+    expect(prompt).toContain('ui, api, services, database, auth, iac, e2e, ci');
+  });
+});
