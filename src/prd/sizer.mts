@@ -10,13 +10,21 @@ import { splitTask, applySplit, canSplitForSize } from './splitter.mts';
 export interface SizingSignals {
   readonly criteriaCount: number;
   readonly domainMentions: number;
-  readonly concernCount: number;
 }
 
-// Derive countable signals from a task's free-text fields.
+// A task genuinely spanning at least this many distinct functional areas is
+// almost certainly too big for one pass. Kept high because DOMAIN_KEYWORDS uses
+// distinctive tokens — incidental single-keyword overlap must not trip the floor.
+const MULTI_DOMAIN_THRESHOLD = 3;
+
+// Derive countable signals from a task's free-text fields. These are a
+// conservative backstop to the model's judgment, not a replacement — they must
+// only fire on genuinely oversized tasks, never on ordinary prose.
 export function computeSignals(task: Task): SizingSignals {
+  // Split acceptance criteria into discrete clauses on newlines, semicolons, and
+  // sentence boundaries so multi-sentence criteria are counted, not collapsed.
   const criteriaCount = task.acceptanceCriteria
-    .split(/[\n;]+/)
+    .split(/[\n;]+|\.\s+/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0).length;
 
@@ -25,22 +33,18 @@ export function computeSignals(task: Task): SizingSignals {
     DOMAIN_KEYWORDS[domain].some((kw) => haystack.includes(kw)),
   ).length;
 
-  const andCount = (task.description.toLowerCase().match(/\band\b/g) ?? []).length;
-  const commaCount = (task.description.match(/,/g) ?? []).length;
-  const concernCount = andCount + commaCount;
-
-  return { criteriaCount, domainMentions, concernCount };
+  return { criteriaCount, domainMentions };
 }
 
-// Force-promote to `L` when any hard signal is exceeded; otherwise keep the
-// model's size. The floor only ever raises size, never lowers it.
+// Force-promote to `L` when a hard signal is exceeded; otherwise keep the
+// model's size. The floor only ever raises size, never lowers it, and is tuned
+// to defer to the model except on unambiguous over-sizing.
 export function applyDeterministicFloor(task: Task, modelSize: TaskSize): TaskSize {
-  const { criteriaCount, domainMentions, concernCount } = computeSignals(task);
+  const { criteriaCount, domainMentions } = computeSignals(task);
   const overCriteria = criteriaCount > env.SIZE_MAX_CRITERIA;
-  const multiDomain = domainMentions > 1;
-  const overConcerns = concernCount > env.SIZE_MAX_CONCERNS;
+  const multiDomain = domainMentions >= MULTI_DOMAIN_THRESHOLD;
 
-  if (overCriteria || multiDomain || overConcerns) {
+  if (overCriteria || multiDomain) {
     return 'L';
   }
   return modelSize;

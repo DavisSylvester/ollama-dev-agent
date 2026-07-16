@@ -23,16 +23,20 @@ describe('computeSignals', () => {
     expect(computeSignals(task).criteriaCount).toBe(5);
   });
 
-  it('detects more than one domain mentioned in the text', () => {
+  it('detects distinct domains via distinctive keywords', () => {
     const task = makeTask({
-      description: 'add an Elysia endpoint and an Angular component',
+      description: 'add an Elysia route handler and an Angular standalone component',
     });
     expect(computeSignals(task).domainMentions).toBeGreaterThan(1);
   });
 
-  it('counts concerns via "and" / commas in the description', () => {
-    const task = makeTask({ description: 'scaffold, wire, validate and test' });
-    expect(computeSignals(task).concernCount).toBeGreaterThanOrEqual(3);
+  it('does not treat generic prose words as domain mentions', () => {
+    // "service", "schema", "route", "test" are ordinary words, not distinctive
+    // domain tokens — they must not inflate the multi-domain signal.
+    const task = makeTask({
+      description: 'write a service that validates the schema and routes the test',
+    });
+    expect(computeSignals(task).domainMentions).toBe(0);
   });
 });
 
@@ -41,16 +45,32 @@ describe('applyDeterministicFloor', () => {
     expect(applyDeterministicFloor(makeTask(), 'S')).toBe('S');
   });
 
+  it('keeps the model size for an ordinary single-domain task', () => {
+    const task = makeTask({
+      description: 'implement the Elysia route handler for creating a card',
+      acceptanceCriteria: 'returns 201 on success. validates the body.',
+    });
+    expect(applyDeterministicFloor(task, 'M')).toBe('M');
+  });
+
   it('force-promotes to L when criteria count exceeds the threshold', () => {
     const task = makeTask({ acceptanceCriteria: 'a\nb\nc\nd\ne' });
     expect(applyDeterministicFloor(task, 'S')).toBe('L');
   });
 
-  it('force-promotes to L when more than one domain is present', () => {
+  it('force-promotes to L when three or more distinct domains are present', () => {
     const task = makeTask({
-      description: 'build an Angular component and a Mongo repository',
+      description:
+        'build an Angular standalone component backed by a Mongo repository port and an Elysia route handler',
     });
     expect(applyDeterministicFloor(task, 'M')).toBe('L');
+  });
+
+  it('does NOT promote a two-domain task (below the multi-domain threshold)', () => {
+    const task = makeTask({
+      description: 'call the Elysia route handler from an Angular standalone component',
+    });
+    expect(applyDeterministicFloor(task, 'S')).toBe('S');
   });
 });
 

@@ -36,9 +36,10 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
   // Deterministic sizing floor: a task is force-promoted to `L` (must split)
-  // when any of these signals is exceeded, regardless of the model's own guess.
+  // when it has more than this many discrete acceptance-criteria clauses,
+  // regardless of the model's own guess. Kept conservative so the floor defers
+  // to the model except on unambiguous over-sizing.
   SIZE_MAX_CRITERIA: z.coerce.number().int().min(1).max(20).default(4),
-  SIZE_MAX_CONCERNS: z.coerce.number().int().min(1).max(20).default(3),
   // When false, an unsplittable `L` warns instead of hard-stopping the run.
   SIZE_ENFORCE_GATE: z
     .string()
