@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { computeSignals, applyDeterministicFloor, getModelSizes } from '../../../src/prd/sizer.mts';
+import { computeSignals, applyDeterministicFloor, getModelSizes, sizePlan, SizeGateError } from '../../../src/prd/sizer.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -71,5 +71,28 @@ describe('getModelSizes', () => {
     const tasks = [makeTask({ id: 'TASK-001' })];
     const sizes = await getModelSizes(tasks, { invokeFn: async () => 'garbage' });
     expect(sizes.get('TASK-001')).toBe('M');
+  });
+});
+
+describe('sizePlan', () => {
+  it('splits an L task into sized children and leaves no L', async () => {
+    const tasks = [makeTask({ id: 'TASK-001', domain: 'database' })];
+    const result = await sizePlan(tasks, {
+      sizeFn: async () => new Map([['TASK-001', 'L']]),
+      splitFn: async () => [
+        { ...makeTask({ id: 'TASK-001-1', domain: 'database', splitDepth: 1 }), size: 'M' as const },
+        { ...makeTask({ id: 'TASK-001-2', domain: 'database', splitDepth: 1, dependsOn: ['TASK-001-1'] }), size: 'M' as const },
+      ],
+    });
+    expect(result.tasks.some((t) => t.size === 'L')).toBe(false);
+    expect(result.tasks.map((t) => t.id)).toEqual(['TASK-001-1', 'TASK-001-2']);
+    expect(result.tasks.every((t) => t.size === 'S' || t.size === 'M')).toBe(true);
+  });
+
+  it('hard-stops when an L cannot be split further', async () => {
+    const tasks = [makeTask({ id: 'TASK-001', splitDepth: 1 })]; // already at max depth
+    await expect(
+      sizePlan(tasks, { sizeFn: async () => new Map([['TASK-001', 'L']]) }),
+    ).rejects.toBeInstanceOf(SizeGateError);
   });
 });
