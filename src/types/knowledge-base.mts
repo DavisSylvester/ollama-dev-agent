@@ -1,5 +1,5 @@
 // Categories the global knowledge base is grouped by.
-export type KBCategory = 'ui' | 'api' | 'database' | 'auth';
+export type KBCategory = 'ui' | 'api' | 'database' | 'auth' | 'terraform' | 'github-actions';
 
 export interface KBMetadata {
   taskId?: string;
