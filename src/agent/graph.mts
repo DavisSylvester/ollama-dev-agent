@@ -6,6 +6,8 @@ import { AgentStateAnnotation } from './state.mts';
 import { emitAgentEvent } from './events.mts';
 import { generatePRD } from '../prd/index.mts';
 import { splitTask, applySplit, canSplit } from '../prd/splitter.mts';
+import { sizePlan, SizeGateError } from '../prd/sizer.mts';
+import { buildSizingReport } from '../prd/sizing-report.mts';
 import { RalphLoop } from '../ralph/index.mts';
 import { ContextManager } from '../ralph/context-manager.mts';
 import { createWorkerTools } from '../tools/index.mts';
@@ -13,14 +15,14 @@ import { env } from '../env.mts';
 import type { AgentStateType } from './state.mts';
 import type { Task } from '../types/index.mts';
 
-// --- Node: generate_prd ---
+// --- Node: draft_plan ---
 
-async function generatePRDNode(
+async function draftPlanNode(
   state: AgentStateType,
 ): Promise<Partial<AgentStateType>> {
   // Skip generation if a PRD was pre-loaded (e.g. via --prd-file)
   if (state.prd !== null) {
-    return { phase: 'awaiting_approval' };
+    return { phase: 'sizing_plan' };
   }
 
   emitAgentEvent('phase_changed', { phase: 'generating_prd' });
@@ -48,6 +50,60 @@ async function generatePRDNode(
     tasks: prd.tasks,
     phase: 'awaiting_approval',
   };
+}
+
+// --- Node: size_plan ---
+//
+// Assigns a T-shirt size to every task (model judgment + deterministic floor),
+// proactively splits any `L` into S/M children, and refuses to proceed if an
+// oversized task survives. Writes SIZING.md alongside the other planning docs.
+
+async function sizePlanNode(
+  state: AgentStateType,
+): Promise<Partial<AgentStateType>> {
+  emitAgentEvent('phase_changed', { phase: 'sizing_plan' });
+
+  let result: Awaited<ReturnType<typeof sizePlan>>;
+  try {
+    result = await sizePlan(state.tasks);
+  } catch (err) {
+    if (err instanceof SizeGateError) {
+      emitAgentEvent('error', {
+        phase: 'sizing_plan',
+        message: err.message,
+        unsplittableIds: err.unsplittableIds,
+      });
+    }
+    throw err; // abort the run — an oversized task must not execute
+  }
+
+  emitAgentEvent('plan_sized', {
+    distribution: result.distribution,
+    splits: result.splits,
+    taskCount: result.tasks.length,
+  });
+
+  const sizingMarkdown = buildSizingReport(
+    state.featureName,
+    state.featureSlug,
+    result,
+  );
+  const resultsDir = join('feature-results', state.featureSlug);
+  await mkdir(resultsDir, { recursive: true });
+  await writeFile(join(resultsDir, 'SIZING.md'), sizingMarkdown, 'utf-8');
+
+  return { tasks: result.tasks, phase: 'awaiting_approval' };
+}
+
+// --- Node: ratify_plan (Phase B stub) ---
+//
+// Placeholder for the ratifying council. In Phase A it passes the sized plan
+// through unchanged. Phase B replaces this with a debate-and-ratify pass.
+
+async function ratifyPlanNode(
+  _state: AgentStateType,
+): Promise<Partial<AgentStateType>> {
+  return { phase: 'awaiting_approval' };
 }
 
 // --- Node: run_task ---
@@ -144,7 +200,8 @@ async function runTaskNode(
     try {
       const subTasks = await splitTask(failed, failureContext);
       if (subTasks.length > 0) {
-        mergedTasks = applySplit(mergedTasks, failed.id, subTasks);
+        const sized = await sizePlan(subTasks).catch(() => ({ tasks: subTasks, distribution: { S: 0, M: 0, L: 0 }, splits: [] }));
+        mergedTasks = applySplit(mergedTasks, failed.id, sized.tasks);
         emitAgentEvent('task_split', {
           taskId: failed.id,
           subTaskIds: subTasks.map((s) => s.id),
@@ -338,11 +395,15 @@ function routeAfterTask(
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- LangGraph compile() return type is complex and inferred
 export function buildAgentGraph() {
   const graph = new StateGraph(AgentStateAnnotation)
-    .addNode('generate_prd', generatePRDNode)
+    .addNode('draft_plan', draftPlanNode)
+    .addNode('size_plan', sizePlanNode)
+    .addNode('ratify_plan', ratifyPlanNode)
     .addNode('run_task', runTaskNode)
     .addNode('generate_results', generateResultsNode)
-    .addEdge(START, 'generate_prd')
-    .addEdge('generate_prd', 'run_task')
+    .addEdge(START, 'draft_plan')
+    .addEdge('draft_plan', 'size_plan')
+    .addEdge('size_plan', 'ratify_plan')
+    .addEdge('ratify_plan', 'run_task')
     .addConditionalEdges('run_task', routeAfterTask, {
       run_task: 'run_task',
       generate_results: 'generate_results',
