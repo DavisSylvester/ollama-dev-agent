@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { computeSignals, applyDeterministicFloor, getModelSizes, sizePlan, SizeGateError, explainOversize, recommendSplitApproach } from '../../../src/prd/sizer.mts';
+import { computeSignals, applyDeterministicFloor, getModelSizes, sizePlan, SizeGateError, explainOversize, recommendSplitApproach, debateSplit } from '../../../src/prd/sizer.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -170,6 +170,40 @@ describe('explainOversize', () => {
     const { reasons, recommendation } = explainOversize(makeTask());
     expect(reasons.join(' ').toLowerCase()).toContain('model');
     expect(recommendation.toLowerCase()).toContain('module');
+  });
+});
+
+describe('debateSplit', () => {
+  it('builds sized-ready children and a recommendation from a successful debate', async () => {
+    const parent = makeTask({ id: 'TASK-050', domain: 'database' });
+    const out = await debateSplit(parent, {
+      debateFn: async () => ({
+        taskId: parent.id, taskName: parent.name, rounds: [], decidedBy: 'consensus' as const,
+        transcript: 't',
+        finalStories: [
+          { name: 'schema', description: 'd', acceptanceCriteria: 'a' },
+          { name: 'repo', description: 'd', acceptanceCriteria: 'b' },
+        ],
+      }),
+    });
+    expect(out.children.map((c) => c.id)).toEqual(['TASK-050-1', 'TASK-050-2']);
+    expect(out.children.every((c) => c.domain === 'database')).toBe(true);
+    expect(out.recommendation.taskId).toBe('TASK-050');
+    expect(out.recommendation.recommendation.toLowerCase()).toContain('consensus');
+  });
+
+  it('retries once then falls back to the deterministic split on repeated debate failure', async () => {
+    const parent = makeTask({ id: 'TASK-051', acceptanceCriteria: 'a\nb\nc\nd\ne\nf' });
+    let calls = 0;
+    const out = await debateSplit(parent, {
+      debateFn: async () => { calls++; throw new Error('ollama down'); },
+      splitFn: async () => [
+        { ...makeTask({ id: 'TASK-051-1', splitDepth: 1 }), size: 'M' as const },
+      ],
+    });
+    expect(calls).toBe(2); // initial + one retry
+    expect(out.children.map((c) => c.id)).toEqual(['TASK-051-1']);
+    expect(out.recommendation.recommendation.toLowerCase()).toContain('acceptance-criteria'); // deterministic text
   });
 });
 

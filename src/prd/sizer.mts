@@ -5,7 +5,8 @@ import { createChatModel } from '../models/index.mts';
 import { buildSizingPrompt, buildSplitRecommendationPrompt } from './prompts.mts';
 import { HumanMessage, SystemMessage, type AIMessage } from '@langchain/core/messages';
 import { logger } from '../logger.mts';
-import { splitTask, applySplit, canSplitForSize } from './splitter.mts';
+import { splitTask, applySplit, canSplitForSize, buildChildTasks } from './splitter.mts';
+import { runDebate, type DebateResult, type DebateDeps } from './debate.mts';
 
 export interface SizingSignals {
   readonly criteriaCount: number;
@@ -203,6 +204,56 @@ export async function getModelSizes(
   }
 
   return sizes;
+}
+
+export interface DebateSplitDeps extends DebateDeps {
+  // Override the whole debate (unit tests inject a canned DebateResult).
+  debateFn?: (task: Task) => Promise<DebateResult>;
+  // Deterministic fallback splitter (defaults to splitTask).
+  splitFn?: typeof splitTask;
+}
+
+export interface DebateSplitResult {
+  children: Task[];
+  recommendation: SizeRecommendation;
+}
+
+function summarizeDebate(task: Task, result: DebateResult): SizeRecommendation {
+  const { reasons } = explainOversize(task);
+  const stories = result.finalStories.map((s, i) => `${i + 1}. ${s.name} — ${s.description}`).join('\n');
+  const recommendation =
+    `Decided by ${result.decidedBy} after ${result.rounds.length} round(s). Split into:\n${stories}`;
+  return { taskId: task.id, taskName: task.name, reasons, recommendation };
+}
+
+function deterministicRecommendation(task: Task): SizeRecommendation {
+  const { reasons, recommendation } = explainOversize(task);
+  return { taskId: task.id, taskName: task.name, reasons, recommendation };
+}
+
+// Run the debate to drive the split. Retries the debate once, then falls back
+// to the deterministic splitter + recommendation so the run never stalls on a
+// flaky model.
+export async function debateSplit(task: Task, deps?: DebateSplitDeps): Promise<DebateSplitResult> {
+  const debate = deps?.debateFn ?? ((t: Task) => runDebate(t, deps));
+  const split = deps?.splitFn ?? splitTask;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const result = await debate(task);
+      const children = buildChildTasks(task, result.finalStories);
+      if (children.length === 0) throw new Error('debate produced no stories');
+      return { children, recommendation: summarizeDebate(task, result) };
+    } catch (err) {
+      logger.warn(
+        { taskId: task.id, attempt, err: err instanceof Error ? err.message : String(err) },
+        'sizer.debate_failed',
+      );
+    }
+  }
+
+  const children = await split(task, '');
+  return { children, recommendation: deterministicRecommendation(task) };
 }
 
 export interface SizedPlanResult {
