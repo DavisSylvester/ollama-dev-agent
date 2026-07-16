@@ -17,6 +17,10 @@ export interface Task {
   // How many times this task's lineage has been auto-split (0 = original task).
   // Caps recursive splitting when a task repeatedly fails.
   splitDepth?: number;
+  // Wall-clock timestamps for the progress board. startedAt is stamped when the
+  // task enters in_progress; completedAt when it reaches complete/failed.
+  startedAt?: string | null;
+  completedAt?: string | null;
 }
 
 export type TaskStatus = 'pending' | 'in_progress' | 'complete' | 'failed';
