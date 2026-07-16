@@ -35,6 +35,15 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
+  // Deterministic sizing floor: a task is force-promoted to `L` (must split)
+  // when any of these signals is exceeded, regardless of the model's own guess.
+  SIZE_MAX_CRITERIA: z.coerce.number().int().min(1).max(20).default(4),
+  SIZE_MAX_CONCERNS: z.coerce.number().int().min(1).max(20).default(3),
+  // When false, an unsplittable `L` warns instead of hard-stopping the run.
+  SIZE_ENFORCE_GATE: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
   NUM_CTX: z.coerce.number().int().min(2048).default(32768),
   BRAVE_API_KEY: z.string().optional(),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
