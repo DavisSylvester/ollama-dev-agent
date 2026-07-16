@@ -1,4 +1,5 @@
-import type { Task } from '../types/index.mts';
+import { isTaskDomain, type Task, type TaskDomain } from '../types/index.mts';
+import { logger } from '../logger.mts';
 
 export function extractFeatureSlug(prd: string): string {
   const slugMatch = prd.match(/\*\*Feature Slug\*\*:\s*([^\n\r]+)/);
@@ -53,6 +54,7 @@ export function parseTasks(prd: string): Task[] {
     const acceptanceCriteria = extractSubBullet(block, 'Acceptance');
     const testCommand = extractTestCommand(block);
     const dependsOn = extractDependsOn(block);
+    const domain = extractDomain(block, current.id);
 
     tasks.push({
       id: current.id,
@@ -61,6 +63,7 @@ export function parseTasks(prd: string): Task[] {
       acceptanceCriteria,
       testCommand,
       dependsOn,
+      domain,
       status: current.checked ? 'complete' : 'pending',
       iterationCount: 0,
     });
@@ -120,6 +123,15 @@ function extractDependsOn(block: string): readonly string[] {
     .split(',')
     .map((s) => s.trim())
     .filter((s) => /^TASK-\d+$/.test(s));
+}
+
+function extractDomain(block: string, taskId: string): TaskDomain {
+  const raw = extractSubBullet(block, 'Domain').toLowerCase().trim();
+  if (isTaskDomain(raw)) {
+    return raw;
+  }
+  logger.warn({ taskId, raw }, 'parser.domain_missing_defaulted');
+  return 'services';
 }
 
 function extractTestCommand(block: string): string {

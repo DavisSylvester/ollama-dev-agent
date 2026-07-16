@@ -162,6 +162,38 @@ describe('parseTasks', () => {
 });
 
 // ---------------------------------------------------------------------------
+// parseTasks — domain
+// ---------------------------------------------------------------------------
+
+describe('parseTasks — domain', () => {
+  it('parses an explicit **Domain** tag', () => {
+    const prd = [
+      '## Tasks',
+      '- [ ] **TASK-001**: Build login form',
+      '  - **Domain**: ui',
+      '  - **Description**: Angular login component',
+      '  - **Acceptance**: renders and submits',
+      '  - **Test Command**: `bun test`',
+    ].join('\n');
+
+    const [task] = parseTasks(prd);
+    expect(task?.domain).toBe('ui');
+  });
+
+  it('defaults domain to services when the tag is missing', () => {
+    const prd = [
+      '- [ ] **TASK-001**: Something',
+      '  - **Description**: no domain here',
+      '  - **Acceptance**: works',
+      '  - **Test Command**: `bun test`',
+    ].join('\n');
+
+    const [task] = parseTasks(prd);
+    expect(task?.domain).toBe('services');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // updateTaskStatus
 // ---------------------------------------------------------------------------
 
