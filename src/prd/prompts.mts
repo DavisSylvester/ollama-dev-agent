@@ -256,24 +256,6 @@ Output ONLY a JSON array, nothing else:
 ]`;
 }
 
-export function buildSplitRecommendationPrompt(
-  task: Task,
-  reasons: readonly string[],
-): string {
-  return `You are the Story Sizer advising how to break an oversized task into smaller ones.
-
-## Oversized task
-${task.id} [${task.domain}]: ${task.name}
-Description: ${task.description}
-Acceptance: ${task.acceptanceCriteria}
-
-## Why it is too big
-${reasons.map((r) => '- ' + r).join('\n')}
-
-## Your job
-Recommend a concrete decomposition approach in 2 to 4 short bullet points. Each bullet names one smaller, single-concern task the original should be split into. Be specific to THIS task. Output only the bullets, no preamble.`;
-}
-
 export function buildWorkerPrompt(
   task: Task,
   iteration: number,

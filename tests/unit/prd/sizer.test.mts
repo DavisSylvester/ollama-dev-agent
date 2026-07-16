@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { computeSignals, applyDeterministicFloor, getModelSizes, sizePlan, SizeGateError, explainOversize, recommendSplitApproach, debateSplit } from '../../../src/prd/sizer.mts';
+import { computeSignals, applyDeterministicFloor, getModelSizes, sizePlan, SizeGateError, explainOversize, debateSplit } from '../../../src/prd/sizer.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -189,24 +189,5 @@ describe('debateSplit', () => {
     expect(calls).toBe(2); // initial + one retry
     expect(out.children.map((c) => c.id)).toEqual(['TASK-051-1']);
     expect(out.recommendation.recommendation.toLowerCase()).toContain('acceptance-criteria'); // deterministic text
-  });
-});
-
-describe('recommendSplitApproach', () => {
-  it('uses the model text when the model succeeds', async () => {
-    const rec = await recommendSplitApproach(makeTask({ id: 'TASK-9' }), {
-      invokeFn: async () => 'Break it into: (1) schema, (2) repository, (3) service.',
-    });
-    expect(rec.taskId).toBe('TASK-9');
-    expect(rec.recommendation).toContain('schema');
-    expect(rec.reasons.length).toBeGreaterThan(0);
-  });
-
-  it('falls back to the deterministic recommendation on model error', async () => {
-    const rec = await recommendSplitApproach(
-      makeTask({ acceptanceCriteria: 'a\nb\nc\nd\ne\nf' }),
-      { invokeFn: async () => { throw new Error('ollama down'); } },
-    );
-    expect(rec.recommendation.toLowerCase()).toContain('acceptance-criteria');
   });
 });
