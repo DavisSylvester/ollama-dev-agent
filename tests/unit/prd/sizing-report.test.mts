@@ -26,7 +26,7 @@ describe('buildSizingReport', () => {
     expect(md).toContain('TASK-001 → TASK-001-1, TASK-001-2');
   });
 
-  it('renders a recommendations section for oversized tasks', () => {
+  it('renders a debate-sourced recommendation with the decision maker', () => {
     const result: SizedPlanResult = {
       tasks: [task('TASK-001', 'database', 'L')],
       distribution: { S: 0, M: 0, L: 1 },
@@ -36,12 +36,13 @@ describe('buildSizingReport', () => {
           taskId: 'TASK-001',
           taskName: 'big task',
           reasons: ['Spans 3 distinct domains.'],
-          recommendation: 'Separate into one task per functional area.',
+          recommendation: 'Decided by consensus after 2 round(s). Split into:\n1. schema — d\n2. repo — d',
         },
       ],
     };
     const md = buildSizingReport('Notes App', 'notes-app', result);
     expect(md).toContain('## Recommendations for Oversized Tasks');
-    expect(md).toContain('Separate into one task per functional area.');
+    expect(md).toContain('Decided by consensus');
+    expect(md).toContain('Debate outcome'); // new label
   });
 });

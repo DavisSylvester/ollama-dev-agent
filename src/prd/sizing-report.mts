@@ -24,7 +24,7 @@ export function buildSizingReport(
             (r) =>
               `### ${r.taskId} — ${r.taskName}\n\n` +
               `**Why:** ${r.reasons.join(' ')}\n\n` +
-              `**Recommended approach:**\n\n${r.recommendation}`,
+              `**Debate outcome:**\n\n${r.recommendation}`,
           )
           .join('\n\n')
       : '_No tasks were flagged oversized._';
