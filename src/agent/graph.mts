@@ -13,8 +13,13 @@ import { ContextManager } from '../ralph/context-manager.mts';
 import { createWorkerTools } from '../tools/index.mts';
 import { env } from '../env.mts';
 import { saveRunState, buildRunState } from './run-state.mts';
+import { stampStarted, stampFinished } from './progress-board.mts';
 import type { AgentStateType } from './state.mts';
 import type { Task } from '../types/index.mts';
+
+function nowIsoOrNull(tasks: Task[], id: string): string | null {
+  return tasks.find((t) => t.id === id)?.completedAt ?? null;
+}
 
 // --- Node: draft_plan ---
 
@@ -90,6 +95,7 @@ export async function sizePlanNode(
     splits: result.splits,
     recommendations: result.recommendations,
     taskCount: result.tasks.length,
+    tasks: result.tasks,
   });
 
   const sizingMarkdown = buildSizingReport(
@@ -153,7 +159,7 @@ async function runTaskNode(
 
     const blockedIds = new Set(blocked.map((t) => t.id));
     const mergedTasks: Task[] = state.tasks.map((t) =>
-      blockedIds.has(t.id) ? { ...t, status: 'failed' as const } : t,
+      blockedIds.has(t.id) ? stampFinished(t, 'failed') : t,
     );
 
     for (const t of blocked) {
@@ -162,32 +168,32 @@ async function runTaskNode(
         taskName: t.name,
         iterations: 0,
         reason: 'Blocked by a failed dependency',
+        completedAt: nowIsoOrNull(mergedTasks, t.id),
       });
     }
 
     return { tasks: mergedTasks, phase: 'executing_tasks' };
   }
 
-  // Mark ready tasks as in_progress before launching
+  // Mark ready tasks as in_progress (stamping startedAt) before launching
   const tasksWithProgress: Task[] = state.tasks.map((t) =>
-    readyTasks.some((r) => r.id === t.id) ? { ...t, status: 'in_progress' as const } : t,
+    readyTasks.some((r) => r.id === t.id) ? stampStarted(t) : t,
   );
+  const stampedReady = tasksWithProgress.filter((t) => readyTasks.some((r) => r.id === t.id));
 
   emitAgentEvent('phase_changed', { phase: 'executing_tasks' });
 
   // Run all ready tasks in parallel
   const results = await Promise.allSettled(
-    readyTasks.map((task) =>
-      runSingleTask(task, state, tasksWithProgress),
-    ),
+    stampedReady.map((task) => runSingleTask(task, state, tasksWithProgress)),
   );
 
   // Merge settled results back into the full task list
   let mergedTasks: Task[] = tasksWithProgress;
   const completedIds: string[] = [];
 
-  for (let i = 0; i < readyTasks.length; i++) {
-    const task = readyTasks[i]!;
+  for (let i = 0; i < stampedReady.length; i++) {
+    const task = stampedReady[i]!;
     const result = results[i]!;
 
     if (result.status === 'fulfilled') {
@@ -207,7 +213,7 @@ async function runTaskNode(
   // A task that failed (hit its iteration cap) is likely too large. Decompose
   // it into sub-tasks and run those instead of giving up. Split at most once.
   const ctx = new ContextManager(state.workingDirectory, state.featureSlug);
-  for (let i = 0; i < readyTasks.length; i++) {
+  for (let i = 0; i < stampedReady.length; i++) {
     const result = results[i]!;
     if (result.status !== 'fulfilled' || result.value.status !== 'failed') continue;
     const failed = result.value;
@@ -229,6 +235,7 @@ async function runTaskNode(
           taskId: failed.id,
           subTaskIds: subTasks.map((s) => s.id),
           count: subTasks.length,
+          children: subTasks.map((s) => ({ id: s.id, name: s.name, domain: s.domain })),
         });
       }
     } catch {
@@ -265,6 +272,7 @@ async function runSingleTask(
   emitAgentEvent('task_started', {
     taskId: task.id,
     taskName: task.name,
+    startedAt: task.startedAt ?? null,
     taskIndex: currentTasks.findIndex((t) => t.id === task.id),
     totalTasks: currentTasks.length,
   });
@@ -320,11 +328,14 @@ async function runSingleTask(
     },
   );
 
+  const finished = stampFinished(task, finalStatus === 'complete' ? 'complete' : 'failed');
+
   if (finalStatus === 'complete') {
     emitAgentEvent('task_complete', {
       taskId: task.id,
       taskName: task.name,
       iterations: lastIterationCount,
+      completedAt: finished.completedAt ?? null,
     });
   } else {
     emitAgentEvent('task_failed', {
@@ -332,10 +343,11 @@ async function runSingleTask(
       taskName: task.name,
       iterations: lastIterationCount,
       reason: `Exhausted ${state.maxIterations} iterations without SHIP decision`,
+      completedAt: finished.completedAt ?? null,
     });
   }
 
-  return { ...task, status: finalStatus, iterationCount: lastIterationCount };
+  return { ...finished, iterationCount: lastIterationCount };
 }
 
 // Returns all pending tasks whose dependencies are fully satisfied
