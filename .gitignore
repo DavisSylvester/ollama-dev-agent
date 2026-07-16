@@ -40,3 +40,6 @@ feature-results/
 
 # Generated scratch projects from agent runs
 test-run/
+
+# Local test database
+test.db
