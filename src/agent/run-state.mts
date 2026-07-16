@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DateTime } from 'luxon';
 import { logger } from '../logger.mts';
@@ -66,4 +66,34 @@ export async function loadRunState(featureSlug: string): Promise<RunState | null
     logger.warn({ featureSlug, err: err instanceof Error ? err.message : String(err) }, 'run_state.parse_failed');
     return null;
   }
+}
+
+// Scan feature-results/*/state.json for a resumable match: same working dir,
+// same identity (prdFile path when given, else userPrompt), and at least one
+// task not yet complete. Returns the newest match by updatedAt, or null.
+export async function findResumableRun(
+  workingDirectory: string,
+  userPrompt: string,
+  prdFile: string | null,
+): Promise<RunState | null> {
+  let slugs: string[];
+  try {
+    slugs = await readdir('feature-results');
+  } catch {
+    return null;
+  }
+
+  const candidates: RunState[] = [];
+  for (const slug of slugs) {
+    const state = await loadRunState(slug);
+    if (!state) continue;
+
+    const sameDir = state.workingDirectory === workingDirectory;
+    const idMatch = prdFile != null ? state.prdFile === prdFile : state.userPrompt === userPrompt;
+    const hasWork = state.tasks.some((t) => t.status !== 'complete');
+    if (sameDir && idMatch && hasWork) candidates.push(state);
+  }
+
+  candidates.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return candidates[0] ?? null;
 }
