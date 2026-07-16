@@ -97,3 +97,37 @@ export async function findResumableRun(
   candidates.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return candidates[0] ?? null;
 }
+
+// On resume, only `complete` is terminal — every other status gets a fresh
+// attempt. iterationCount is retained for reporting.
+export function normalizeResumedTasks(tasks: readonly Task[]): Task[] {
+  return tasks.map((t) => (t.status === 'complete' ? t : { ...t, status: 'pending' as const }));
+}
+
+export interface BuildRunStateArgs {
+  featureSlug: string;
+  featureName: string;
+  userPrompt: string;
+  prdFile: string | null;
+  workingDirectory: string;
+  prd: PRD | null;
+  tasks: Task[];
+}
+
+// Assemble a RunState. createdAt/updatedAt are set to now; saveRunState
+// preserves the original createdAt if a file already exists.
+export function buildRunState(args: BuildRunStateArgs): RunState {
+  const now = DateTime.utc().toISO() ?? '';
+  return {
+    version: RUN_STATE_VERSION,
+    featureSlug: args.featureSlug,
+    featureName: args.featureName,
+    userPrompt: args.userPrompt,
+    prdFile: args.prdFile,
+    workingDirectory: args.workingDirectory,
+    createdAt: now,
+    updatedAt: now,
+    prd: args.prd,
+    tasks: args.tasks,
+  };
+}

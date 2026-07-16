@@ -1,7 +1,7 @@
 import { describe, expect, it, afterEach } from 'bun:test';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { saveRunState, loadRunState, findResumableRun, RUN_STATE_VERSION, type RunState } from '../../../src/agent/run-state.mts';
+import { saveRunState, loadRunState, findResumableRun, normalizeResumedTasks, buildRunState, RUN_STATE_VERSION, type RunState } from '../../../src/agent/run-state.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 function task(id: string, status: Task['status']): Task {
@@ -80,5 +80,32 @@ describe('findResumableRun', () => {
     }));
     const found = await findResumableRun('C:/proj', 'ignored', '/prds/notes.md');
     expect(found?.featureSlug).toBe('other-app');
+  });
+});
+
+describe('normalizeResumedTasks', () => {
+  it('keeps complete, resets everything else to pending', () => {
+    const out = normalizeResumedTasks([
+      task('A', 'complete'),
+      task('B', 'in_progress'),
+      task('C', 'failed'),
+      task('D', 'pending'),
+    ]);
+    expect(out.map((t) => t.status)).toEqual(['complete', 'pending', 'pending', 'pending']);
+  });
+});
+
+describe('buildRunState', () => {
+  it('assembles a versioned RunState from graph pieces', () => {
+    const s = buildRunState({
+      featureSlug: 'notes-app', featureName: 'Notes App', userPrompt: 'p',
+      prdFile: null, workingDirectory: 'C:/proj', prd: null,
+      tasks: [task('TASK-001', 'complete')],
+    });
+    expect(s.version).toBe(RUN_STATE_VERSION);
+    expect(s.featureSlug).toBe('notes-app');
+    expect(s.tasks).toHaveLength(1);
+    expect(typeof s.createdAt).toBe('string');
+    expect(typeof s.updatedAt).toBe('string');
   });
 });
