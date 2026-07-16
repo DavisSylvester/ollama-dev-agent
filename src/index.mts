@@ -31,6 +31,7 @@ program
   .option('--cloud', 'Target Ollama Cloud (https://ollama.com); API key still comes from .env')
   // Planning behavior
   .option('--no-research', 'Disable web-search planning (fast single-shot PRD)')
+  .option('--fresh', 'Ignore any saved state and start a clean run (no resume)')
   // Step budgets
   .option('--planner-max-steps <number>', 'Override the planner research step budget')
   .option('--max-react-steps <number>', 'Override the worker ReAct step budget')
@@ -50,6 +51,7 @@ const opts = program.opts<{
   research: boolean;
   plannerMaxSteps?: string;
   maxReactSteps?: string;
+  fresh?: boolean;
 }>();
 
 // Translate CLI flags into env overrides before the agent reads any config.
@@ -73,6 +75,7 @@ const config: AgentConfig = {
   workingDirectory,
   maxIterations,
   ...(opts.prdFile ? { prdFile: opts.prdFile } : {}),
+  ...(opts.fresh ? { fresh: true } : {}),
 };
 
 const agent = new DevAgent(config);
