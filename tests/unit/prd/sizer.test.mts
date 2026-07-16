@@ -95,52 +95,37 @@ describe('getModelSizes', () => {
 });
 
 describe('sizePlan', () => {
+  const cannedSplit = async () => ({
+    children: [
+      { ...makeTask({ id: 'TASK-001-1', domain: 'database', splitDepth: 1 }), size: 'M' as const },
+      { ...makeTask({ id: 'TASK-001-2', domain: 'database', splitDepth: 1, dependsOn: ['TASK-001-1'] }), size: 'M' as const },
+    ],
+    recommendation: { taskId: 'TASK-001', taskName: 'x', reasons: ['big'], recommendation: 'Decided by consensus' },
+  });
+
   it('splits an L task into sized children and leaves no L', async () => {
     const tasks = [makeTask({ id: 'TASK-001', domain: 'database' })];
     const result = await sizePlan(tasks, {
       sizeFn: async () => new Map([['TASK-001', 'L']]),
-      recommendFn: async (t) => ({ taskId: t.id, taskName: t.name, reasons: ['big'], recommendation: 'split it' }),
-      splitFn: async () => [
-        { ...makeTask({ id: 'TASK-001-1', domain: 'database', splitDepth: 1 }), size: 'M' as const },
-        { ...makeTask({ id: 'TASK-001-2', domain: 'database', splitDepth: 1, dependsOn: ['TASK-001-1'] }), size: 'M' as const },
-      ],
+      debateFn: cannedSplit,
     });
     expect(result.tasks.some((t) => t.size === 'L')).toBe(false);
     expect(result.tasks.map((t) => t.id)).toEqual(['TASK-001-1', 'TASK-001-2']);
     expect(result.tasks.every((t) => t.size === 'S' || t.size === 'M')).toBe(true);
+    expect(result.recommendations).toHaveLength(1);
   });
 
   it('hard-stops when an L cannot be split further', async () => {
     const tasks = [makeTask({ id: 'TASK-001', splitDepth: 1 })]; // already at max depth
     await expect(
-      sizePlan(tasks, {
-        sizeFn: async () => new Map([['TASK-001', 'L']]),
-        recommendFn: async (t) => ({ taskId: t.id, taskName: t.name, reasons: ['big'], recommendation: 'split it' }),
-      }),
+      sizePlan(tasks, { sizeFn: async () => new Map([['TASK-001', 'L']]) }),
     ).rejects.toBeInstanceOf(SizeGateError);
-  });
-
-  it('collects a recommendation for each L task', async () => {
-    const tasks = [makeTask({ id: 'TASK-001', domain: 'database' })];
-    const result = await sizePlan(tasks, {
-      sizeFn: async () => new Map([['TASK-001', 'L']]),
-      recommendFn: async (t) => ({ taskId: t.id, taskName: t.name, reasons: ['big'], recommendation: 'split it' }),
-      splitFn: async () => [
-        { ...makeTask({ id: 'TASK-001-1', domain: 'database', splitDepth: 1 }), size: 'M' as const },
-        { ...makeTask({ id: 'TASK-001-2', domain: 'database', splitDepth: 1, dependsOn: ['TASK-001-1'] }), size: 'M' as const },
-      ],
-    });
-    expect(result.recommendations).toHaveLength(1);
-    expect(result.recommendations[0]?.taskId).toBe('TASK-001');
   });
 
   it('includes recommendations in the gate error for unsplittable L tasks', async () => {
     const tasks = [makeTask({ id: 'TASK-001', splitDepth: 1 })];
     try {
-      await sizePlan(tasks, {
-        sizeFn: async () => new Map([['TASK-001', 'L']]),
-        recommendFn: async (t) => ({ taskId: t.id, taskName: t.name, reasons: ['big'], recommendation: 'split it' }),
-      });
+      await sizePlan(tasks, { sizeFn: async () => new Map([['TASK-001', 'L']]) });
       throw new Error('should have thrown');
     } catch (err) {
       expect(err).toBeInstanceOf(SizeGateError);

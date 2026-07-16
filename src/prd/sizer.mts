@@ -280,8 +280,7 @@ export class SizeGateError extends Error {
 
 export interface SizePlanDeps {
   readonly sizeFn?: (tasks: readonly Task[]) => Promise<Map<string, TaskSize>>;
-  readonly splitFn?: typeof splitTask;
-  readonly recommendFn?: (task: Task) => Promise<SizeRecommendation>;
+  readonly debateFn?: (task: Task) => Promise<DebateSplitResult>;
 }
 
 // Cap on how many split passes we run so a pathological model can't loop forever.
@@ -306,8 +305,7 @@ export async function sizePlan(
   deps?: SizePlanDeps,
 ): Promise<SizedPlanResult> {
   const sizeFn = deps?.sizeFn ?? ((t: readonly Task[]) => getModelSizes(t));
-  const split = deps?.splitFn ?? splitTask;
-  const recommend = deps?.recommendFn ?? ((t: Task) => recommendSplitApproach(t));
+  const debate = deps?.debateFn ?? ((t: Task) => debateSplit(t));
 
   // Size freshly-split children: reuse an existing child size when present,
   // otherwise run the model + floor on the unsized ones.
@@ -325,19 +323,21 @@ export async function sizePlan(
 
   for (let pass = 0; pass < MAX_SIZE_PASSES; pass++) {
     const oversized = current.filter((t) => t.size === 'L');
+    if (oversized.length === 0) break;
 
+    // Unsplittable L tasks still need a recommendation for the gate error.
     for (const t of oversized) {
-      if (!recMap.has(t.id)) {
-        recMap.set(t.id, await recommend(t));
+      if (!canSplitForSize(t) && !recMap.has(t.id)) {
+        recMap.set(t.id, deterministicRecommendation(t));
       }
     }
-    if (oversized.length === 0) break;
 
     const splittable = oversized.filter((t) => canSplitForSize(t));
     if (splittable.length === 0) break; // nothing more we can do — gate decides
 
     for (const parentTask of splittable) {
-      const children = await split(parentTask, '');
+      const { children, recommendation } = await debate(parentTask);
+      if (!recMap.has(parentTask.id)) recMap.set(parentTask.id, recommendation);
       if (children.length === 0) continue;
       const sizedChildren = await sizeChildren(children);
       current = applySplit(current, parentTask.id, sizedChildren);
