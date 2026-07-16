@@ -17,11 +17,31 @@ describe('buildSizingReport', () => {
       tasks: [task('TASK-001-1', 'database', 'M'), task('TASK-002', 'ui', 'S')],
       distribution: { S: 1, M: 1, L: 0 },
       splits: [{ parentId: 'TASK-001', childIds: ['TASK-001-1', 'TASK-001-2'] }],
+      recommendations: [],
     };
     const md = buildSizingReport('Notes App', 'notes-app', result);
     expect(md).toContain('# Sizing: Notes App');
     expect(md).toContain('| S | 1 |');
     expect(md).toContain('TASK-001-1');
     expect(md).toContain('TASK-001 → TASK-001-1, TASK-001-2');
+  });
+
+  it('renders a recommendations section for oversized tasks', () => {
+    const result: SizedPlanResult = {
+      tasks: [task('TASK-001', 'database', 'L')],
+      distribution: { S: 0, M: 0, L: 1 },
+      splits: [],
+      recommendations: [
+        {
+          taskId: 'TASK-001',
+          taskName: 'big task',
+          reasons: ['Spans 3 distinct domains.'],
+          recommendation: 'Separate into one task per functional area.',
+        },
+      ],
+    };
+    const md = buildSizingReport('Notes App', 'notes-app', result);
+    expect(md).toContain('## Recommendations for Oversized Tasks');
+    expect(md).toContain('Separate into one task per functional area.');
   });
 });

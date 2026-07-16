@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { computeSignals, applyDeterministicFloor, getModelSizes, sizePlan, SizeGateError } from '../../../src/prd/sizer.mts';
+import { computeSignals, applyDeterministicFloor, getModelSizes, sizePlan, SizeGateError, explainOversize, recommendSplitApproach } from '../../../src/prd/sizer.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -99,6 +99,7 @@ describe('sizePlan', () => {
     const tasks = [makeTask({ id: 'TASK-001', domain: 'database' })];
     const result = await sizePlan(tasks, {
       sizeFn: async () => new Map([['TASK-001', 'L']]),
+      recommendFn: async (t) => ({ taskId: t.id, taskName: t.name, reasons: ['big'], recommendation: 'split it' }),
       splitFn: async () => [
         { ...makeTask({ id: 'TASK-001-1', domain: 'database', splitDepth: 1 }), size: 'M' as const },
         { ...makeTask({ id: 'TASK-001-2', domain: 'database', splitDepth: 1, dependsOn: ['TASK-001-1'] }), size: 'M' as const },
@@ -112,7 +113,81 @@ describe('sizePlan', () => {
   it('hard-stops when an L cannot be split further', async () => {
     const tasks = [makeTask({ id: 'TASK-001', splitDepth: 1 })]; // already at max depth
     await expect(
-      sizePlan(tasks, { sizeFn: async () => new Map([['TASK-001', 'L']]) }),
+      sizePlan(tasks, {
+        sizeFn: async () => new Map([['TASK-001', 'L']]),
+        recommendFn: async (t) => ({ taskId: t.id, taskName: t.name, reasons: ['big'], recommendation: 'split it' }),
+      }),
     ).rejects.toBeInstanceOf(SizeGateError);
+  });
+
+  it('collects a recommendation for each L task', async () => {
+    const tasks = [makeTask({ id: 'TASK-001', domain: 'database' })];
+    const result = await sizePlan(tasks, {
+      sizeFn: async () => new Map([['TASK-001', 'L']]),
+      recommendFn: async (t) => ({ taskId: t.id, taskName: t.name, reasons: ['big'], recommendation: 'split it' }),
+      splitFn: async () => [
+        { ...makeTask({ id: 'TASK-001-1', domain: 'database', splitDepth: 1 }), size: 'M' as const },
+        { ...makeTask({ id: 'TASK-001-2', domain: 'database', splitDepth: 1, dependsOn: ['TASK-001-1'] }), size: 'M' as const },
+      ],
+    });
+    expect(result.recommendations).toHaveLength(1);
+    expect(result.recommendations[0]?.taskId).toBe('TASK-001');
+  });
+
+  it('includes recommendations in the gate error for unsplittable L tasks', async () => {
+    const tasks = [makeTask({ id: 'TASK-001', splitDepth: 1 })];
+    try {
+      await sizePlan(tasks, {
+        sizeFn: async () => new Map([['TASK-001', 'L']]),
+        recommendFn: async (t) => ({ taskId: t.id, taskName: t.name, reasons: ['big'], recommendation: 'split it' }),
+      });
+      throw new Error('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(SizeGateError);
+      expect((err as SizeGateError).recommendations).toHaveLength(1);
+    }
+  });
+});
+
+describe('explainOversize', () => {
+  it('recommends single-domain separation for a multi-domain task', () => {
+    const task = makeTask({
+      description:
+        'build an Angular standalone component backed by a Mongo repository port and an Elysia route handler',
+    });
+    const { reasons, recommendation } = explainOversize(task);
+    expect(reasons.join(' ')).toContain('domains');
+    expect(recommendation.toLowerCase()).toContain('per functional area');
+  });
+
+  it('recommends criteria grouping when there are too many criteria', () => {
+    const task = makeTask({ acceptanceCriteria: 'a\nb\nc\nd\ne\nf' });
+    const { recommendation } = explainOversize(task);
+    expect(recommendation.toLowerCase()).toContain('acceptance-criteria');
+  });
+
+  it('falls back to module+test guidance when no hard signal fired', () => {
+    const { reasons, recommendation } = explainOversize(makeTask());
+    expect(reasons.join(' ').toLowerCase()).toContain('model');
+    expect(recommendation.toLowerCase()).toContain('module');
+  });
+});
+
+describe('recommendSplitApproach', () => {
+  it('uses the model text when the model succeeds', async () => {
+    const rec = await recommendSplitApproach(makeTask({ id: 'TASK-9' }), {
+      invokeFn: async () => 'Break it into: (1) schema, (2) repository, (3) service.',
+    });
+    expect(rec.taskId).toBe('TASK-9');
+    expect(rec.recommendation).toContain('schema');
+    expect(rec.reasons.length).toBeGreaterThan(0);
+  });
+
+  it('falls back to the deterministic recommendation on model error', async () => {
+    const rec = await recommendSplitApproach(
+      makeTask({ acceptanceCriteria: 'a\nb\nc\nd\ne\nf' }),
+      { invokeFn: async () => { throw new Error('ollama down'); } },
+    );
+    expect(rec.recommendation.toLowerCase()).toContain('acceptance-criteria');
   });
 });

@@ -1,8 +1,8 @@
-import type { Task, TaskSize } from '../types/index.mts';
+import type { Task, TaskSize, TaskDomain } from '../types/index.mts';
 import { TASK_DOMAINS, DOMAIN_KEYWORDS } from '../types/index.mts';
 import { env } from '../env.mts';
 import { createChatModel } from '../models/index.mts';
-import { buildSizingPrompt } from './prompts.mts';
+import { buildSizingPrompt, buildSplitRecommendationPrompt } from './prompts.mts';
 import { HumanMessage, SystemMessage, type AIMessage } from '@langchain/core/messages';
 import { logger } from '../logger.mts';
 import { splitTask, applySplit, canSplitForSize } from './splitter.mts';
@@ -10,6 +10,13 @@ import { splitTask, applySplit, canSplitForSize } from './splitter.mts';
 export interface SizingSignals {
   readonly criteriaCount: number;
   readonly domainMentions: number;
+}
+
+export interface SizeRecommendation {
+  readonly taskId: string;
+  readonly taskName: string;
+  readonly reasons: readonly string[];
+  readonly recommendation: string;
 }
 
 // A task genuinely spanning at least this many distinct functional areas is
@@ -34,6 +41,89 @@ export function computeSignals(task: Task): SizingSignals {
   ).length;
 
   return { criteriaCount, domainMentions };
+}
+
+function detectedDomains(task: Task): TaskDomain[] {
+  const haystack = `${task.description} ${task.acceptanceCriteria}`.toLowerCase();
+  return TASK_DOMAINS.filter((domain) =>
+    DOMAIN_KEYWORDS[domain].some((kw) => haystack.includes(kw)),
+  );
+}
+
+// Explain why a task is oversized and recommend a concrete way to shrink it.
+// Deterministic: derived from the same signals the floor uses, so it is always
+// available even when no model is reachable.
+export function explainOversize(task: Task): { reasons: string[]; recommendation: string } {
+  const { criteriaCount, domainMentions } = computeSignals(task);
+  const overCriteria = criteriaCount > env.SIZE_MAX_CRITERIA;
+  const multiDomain = domainMentions >= MULTI_DOMAIN_THRESHOLD;
+  const domains = detectedDomains(task);
+
+  const reasons: string[] = [];
+  if (multiDomain) {
+    reasons.push(`Spans ${domains.length} distinct domains (${domains.join(', ')}).`);
+  }
+  if (overCriteria) {
+    reasons.push(`Has ${criteriaCount} acceptance-criteria clauses (more than ${env.SIZE_MAX_CRITERIA}).`);
+  }
+  if (reasons.length === 0) {
+    reasons.push('The sizer model judged this task too large for one focused pass.');
+  }
+
+  let recommendation: string;
+  if (multiDomain) {
+    recommendation =
+      `Separate into one task per functional area — ${domains.join(', ')} — so each child is single-domain.`;
+  } else if (overCriteria) {
+    recommendation =
+      `Split by acceptance-criteria groups: cluster the ${criteriaCount} criteria into related groups and make each group its own task.`;
+  } else {
+    recommendation =
+      'Decompose into module-plus-test units: one focused module, endpoint, or component (with its test) per task.';
+  }
+
+  return { reasons, recommendation };
+}
+
+export interface RecommendDeps {
+  readonly invokeFn?: (systemPrompt: string, userPrompt: string) => Promise<string>;
+}
+
+// Always returns a recommendation: deterministic by default, upgraded with the
+// planner model's richer decomposition approach when the model is reachable.
+export async function recommendSplitApproach(
+  task: Task,
+  deps?: RecommendDeps,
+): Promise<SizeRecommendation> {
+  const { reasons, recommendation } = explainOversize(task);
+  let finalRecommendation = recommendation;
+
+  try {
+    const systemPrompt = buildSplitRecommendationPrompt(task, reasons);
+    const userPrompt = 'Recommend a decomposition approach now.';
+    let raw: string;
+    if (deps?.invokeFn) {
+      raw = await deps.invokeFn(systemPrompt, userPrompt);
+    } else {
+      const model = createChatModel(env.PLANNER_MODEL);
+      const res = (await model.invoke([
+        new SystemMessage(systemPrompt),
+        new HumanMessage(userPrompt),
+      ])) as AIMessage;
+      raw = extractContent(res);
+    }
+    const trimmed = raw.trim();
+    if (trimmed.length > 0) {
+      finalRecommendation = trimmed;
+    }
+  } catch (err) {
+    logger.warn(
+      { taskId: task.id, err: err instanceof Error ? err.message : String(err) },
+      'sizer.recommend_model_failed',
+    );
+  }
+
+  return { taskId: task.id, taskName: task.name, reasons, recommendation: finalRecommendation };
 }
 
 // Force-promote to `L` when a hard signal is exceeded; otherwise keep the
@@ -119,12 +209,16 @@ export interface SizedPlanResult {
   readonly tasks: Task[];
   readonly distribution: Record<TaskSize, number>;
   readonly splits: Array<{ parentId: string; childIds: string[] }>;
+  readonly recommendations: readonly SizeRecommendation[];
 }
 
 // Thrown when a task remains `L` and cannot be split further while the gate is
 // enforced. Aborts the run rather than executing an oversized task.
 export class SizeGateError extends Error {
-  constructor(public readonly unsplittableIds: string[]) {
+  constructor(
+    public readonly unsplittableIds: string[],
+    public readonly recommendations: readonly SizeRecommendation[] = [],
+  ) {
     super(
       `Sizing gate failed: ${unsplittableIds.length} task(s) remain size L and ` +
         `cannot be split further: ${unsplittableIds.join(', ')}`,
@@ -136,6 +230,7 @@ export class SizeGateError extends Error {
 export interface SizePlanDeps {
   readonly sizeFn?: (tasks: readonly Task[]) => Promise<Map<string, TaskSize>>;
   readonly splitFn?: typeof splitTask;
+  readonly recommendFn?: (task: Task) => Promise<SizeRecommendation>;
 }
 
 // Cap on how many split passes we run so a pathological model can't loop forever.
@@ -161,6 +256,7 @@ export async function sizePlan(
 ): Promise<SizedPlanResult> {
   const sizeFn = deps?.sizeFn ?? ((t: readonly Task[]) => getModelSizes(t));
   const split = deps?.splitFn ?? splitTask;
+  const recommend = deps?.recommendFn ?? ((t: Task) => recommendSplitApproach(t));
 
   // Size freshly-split children: reuse an existing child size when present,
   // otherwise run the model + floor on the unsized ones.
@@ -174,9 +270,16 @@ export async function sizePlan(
   const modelSizes = await sizeFn(tasks);
   let current: Task[] = tasks.map((t) => sizeOne(t, modelSizes));
   const splits: Array<{ parentId: string; childIds: string[] }> = [];
+  const recMap = new Map<string, SizeRecommendation>();
 
   for (let pass = 0; pass < MAX_SIZE_PASSES; pass++) {
     const oversized = current.filter((t) => t.size === 'L');
+
+    for (const t of oversized) {
+      if (!recMap.has(t.id)) {
+        recMap.set(t.id, await recommend(t));
+      }
+    }
     if (oversized.length === 0) break;
 
     const splittable = oversized.filter((t) => canSplitForSize(t));
@@ -191,10 +294,14 @@ export async function sizePlan(
     }
   }
 
+  const recommendations = [...recMap.values()];
   const stillLarge = current.filter((t) => t.size === 'L').map((t) => t.id);
   if (stillLarge.length > 0 && env.SIZE_ENFORCE_GATE) {
-    throw new SizeGateError(stillLarge);
+    throw new SizeGateError(
+      stillLarge,
+      recommendations.filter((r) => stillLarge.includes(r.taskId)),
+    );
   }
 
-  return { tasks: current, distribution: countSizes(current), splits };
+  return { tasks: current, distribution: countSizes(current), splits, recommendations };
 }

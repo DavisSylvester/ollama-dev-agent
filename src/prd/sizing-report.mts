@@ -17,6 +17,18 @@ export function buildSizingReport(
       ? splits.map((s) => `- ${s.parentId} → ${s.childIds.join(', ')}`).join('\n')
       : '_No proactive splits were required._';
 
+  const recRows =
+    result.recommendations.length > 0
+      ? result.recommendations
+          .map(
+            (r) =>
+              `### ${r.taskId} — ${r.taskName}\n\n` +
+              `**Why:** ${r.reasons.join(' ')}\n\n` +
+              `**Recommended approach:**\n\n${r.recommendation}`,
+          )
+          .join('\n\n')
+      : '_No tasks were flagged oversized._';
+
   return `# Sizing: ${featureName}
 
 **Feature Slug**: ${featureSlug}
@@ -39,5 +51,9 @@ ${taskRows}
 ## Proactive Splits
 
 ${splitRows}
+
+## Recommendations for Oversized Tasks
+
+${recRows}
 `;
 }
