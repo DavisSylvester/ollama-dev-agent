@@ -13,6 +13,7 @@ interface StatusBarProps {
 const PHASE_LABELS: Record<AgentPhase, string> = {
   initializing: 'Initializing',
   generating_prd: 'Generating PRD',
+  sizing_plan: 'Sizing Plan',
   awaiting_approval: 'Awaiting Approval',
   executing_tasks: 'Executing Tasks',
   worker_running: 'Worker Running',
@@ -26,6 +27,7 @@ const PHASE_LABELS: Record<AgentPhase, string> = {
 const ACTIVE_PHASES: ReadonlySet<AgentPhase> = new Set<AgentPhase>([
   'initializing',
   'generating_prd',
+  'sizing_plan',
   'executing_tasks',
   'worker_running',
   'lint_running',
