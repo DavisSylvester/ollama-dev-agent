@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { DEBATE_PERSONAS, personaModel, parseStories, parseStance } from '../../../src/prd/debate.mts';
+import { DEBATE_PERSONAS, personaModel, parseStories, parseStance, runDebate, DebateError, type DebateDeps } from '../../../src/prd/debate.mts';
+import type { Task } from '../../../src/types/index.mts';
 
 describe('personaModel', () => {
   it('maps SA and SME to the planner model, Scrum and Dev to the coder model (defaults)', () => {
@@ -32,5 +33,48 @@ describe('parseStance', () => {
   });
   it('defaults a garbled stance to revise', () => {
     expect(parseStance('sme', 'garbage').verdict).toBe('revise');
+  });
+});
+
+function makeTask(over: Partial<Task> = {}): Task {
+  return {
+    id: 'TASK-001', name: 'big', description: 'd', acceptanceCriteria: 'a; b; c',
+    testCommand: 'bun test', dependsOn: [], domain: 'database', status: 'pending',
+    iterationCount: 0, ...over,
+  };
+}
+
+const twoStories = '[{"name":"schema","description":"d","acceptanceCriteria":"a"},{"name":"repo","description":"d","acceptanceCriteria":"b"}]';
+
+describe('runDebate', () => {
+  it('ends in round 1 by consensus when all personas agree', async () => {
+    const deps: DebateDeps = {
+      proposeFn: async () => twoStories,
+      critiqueFn: async () => '{"verdict":"agree","comments":"ok"}',
+      synthesizeFn: async () => { throw new Error('should not synthesize on consensus'); },
+    };
+    const result = await runDebate(makeTask(), deps);
+    expect(result.decidedBy).toBe('consensus');
+    expect(result.rounds).toHaveLength(1);
+    expect(result.finalStories).toHaveLength(2);
+  });
+
+  it('runs to the round cap then the architect decides', async () => {
+    const deps: DebateDeps = {
+      proposeFn: async () => twoStories,
+      critiqueFn: async () => '{"verdict":"revise","comments":"nope"}',
+      synthesizeFn: async () => twoStories,
+    };
+    const result = await runDebate(makeTask(), deps);
+    expect(result.decidedBy).toBe('architect');
+    expect(result.rounds).toHaveLength(4); // DEBATE_MAX_ROUNDS
+  });
+
+  it('throws DebateError when the opening proposal has no stories', async () => {
+    const deps: DebateDeps = {
+      proposeFn: async () => 'not json',
+      critiqueFn: async () => '{"verdict":"agree","comments":"ok"}',
+    };
+    await expect(runDebate(makeTask(), deps)).rejects.toBeInstanceOf(DebateError);
   });
 });
