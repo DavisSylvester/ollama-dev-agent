@@ -2,6 +2,7 @@ import { buildAgentGraph } from './graph.mts';
 import { emitAgentEvent } from './events.mts';
 import { loadPRDFromFile } from '../prd/index.mts';
 import { findResumableRun, normalizeResumedTasks } from './run-state.mts';
+import { startProgressBoard } from './progress-board.mts';
 import { assertOllamaReachable } from '../models/index.mts';
 import { env } from '../env.mts';
 import type { AgentConfig } from '../types/index.mts';
@@ -17,6 +18,11 @@ export class DevAgent {
     await assertOllamaReachable();
 
     const graph = buildAgentGraph();
+
+    // Attach the realtime progress board before any seed events fire so it
+    // captures prd_generated / run_resumed and writes PROGRESS.md live.
+    const board = startProgressBoard();
+
     const prdFile = this.config.prdFile ?? null;
 
     const initialState: Record<string, unknown> = {
@@ -70,7 +76,11 @@ export class DevAgent {
       : 0;
     const recursionLimit = Math.max(100, taskCount * 6 + 20);
 
-    await graph.invoke(initialState, { recursionLimit });
+    try {
+      await graph.invoke(initialState, { recursionLimit });
+    } finally {
+      board.stop();
+    }
   }
 }
 

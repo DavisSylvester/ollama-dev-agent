@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'bun:test';
-import { buildProgressBoard, stampStarted, stampFinished } from '../../../src/agent/progress-board.mts';
+import { describe, expect, it, afterEach } from 'bun:test';
+import { readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { buildProgressBoard, stampStarted, stampFinished, startProgressBoard } from '../../../src/agent/progress-board.mts';
+import { emitAgentEvent } from '../../../src/agent/events.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 function task(id: string, domain: Task['domain'], status: Task['status'], over: Partial<Task> = {}): Task {
@@ -53,5 +56,41 @@ describe('stampStarted / stampFinished', () => {
     const t = stampFinished(task('T1', 'ui', 'in_progress'), 'complete');
     expect(t.status).toBe('complete');
     expect(typeof t.completedAt).toBe('string');
+  });
+});
+
+afterEach(async () => {
+  await rm(join('feature-results', 'board-test'), { recursive: true, force: true });
+});
+
+async function readBoard(): Promise<string> {
+  return readFile(join('feature-results', 'board-test', 'PROGRESS.md'), 'utf-8');
+}
+
+describe('startProgressBoard (realtime)', () => {
+  it('writes PROGRESS.md and updates it on task events', async () => {
+    const board = startProgressBoard();
+    try {
+      emitAgentEvent('prd_generated', {
+        featureName: 'Board Test',
+        featureSlug: 'board-test',
+        prd: { tasks: [task('TASK-001', 'services', 'pending'), task('TASK-002', 'services', 'pending')] },
+      });
+      // let the async file writes settle
+      await new Promise((r) => setTimeout(r, 20));
+      expect(await readBoard()).toContain('[ ] TASK-001');
+
+      emitAgentEvent('task_started', { taskId: 'TASK-001', startedAt: '2026-07-16T12:00:00.000Z' });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(await readBoard()).toContain('[-] TASK-001');
+
+      emitAgentEvent('task_complete', { taskId: 'TASK-001', completedAt: '2026-07-16T12:00:30.000Z' });
+      await new Promise((r) => setTimeout(r, 20));
+      const md = await readBoard();
+      expect(md).toContain('[✓] TASK-001');
+      expect(md).toContain('done 2026-07-16T12:00:30.000Z');
+    } finally {
+      board.stop();
+    }
   });
 });
