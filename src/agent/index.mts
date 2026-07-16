@@ -1,6 +1,7 @@
 import { buildAgentGraph } from './graph.mts';
 import { emitAgentEvent } from './events.mts';
 import { loadPRDFromFile } from '../prd/index.mts';
+import { findResumableRun, normalizeResumedTasks } from './run-state.mts';
 import { assertOllamaReachable } from '../models/index.mts';
 import { env } from '../env.mts';
 import type { AgentConfig } from '../types/index.mts';
@@ -16,13 +17,36 @@ export class DevAgent {
     await assertOllamaReachable();
 
     const graph = buildAgentGraph();
+    const prdFile = this.config.prdFile ?? null;
+
     const initialState: Record<string, unknown> = {
       userPrompt: prompt,
       workingDirectory: this.config.workingDirectory,
       maxIterations: this.config.maxIterations ?? env.MAX_ITERATIONS,
+      prdFile,
     };
 
-    if (this.config.prdFile) {
+    // Resume: unless --fresh, look for a prior incomplete run for this work and
+    // reload its plan + statuses, skipping the planning phase entirely.
+    const resumable = this.config.fresh
+      ? null
+      : await findResumableRun(this.config.workingDirectory, prompt, prdFile);
+
+    if (resumable) {
+      const tasks = normalizeResumedTasks(resumable.tasks);
+      initialState['resumed'] = true;
+      initialState['prd'] = resumable.prd;
+      initialState['featureName'] = resumable.featureName;
+      initialState['featureSlug'] = resumable.featureSlug;
+      initialState['tasks'] = tasks;
+      emitAgentEvent('run_resumed', {
+        featureSlug: resumable.featureSlug,
+        featureName: resumable.featureName,
+        totalTasks: tasks.length,
+        remainingTasks: tasks.filter((t) => t.status !== 'complete').length,
+        tasks,
+      });
+    } else if (this.config.prdFile) {
       const prd = await loadPRDFromFile(this.config.prdFile);
       initialState['prd'] = prd;
       initialState['featureName'] = prd.featureName;
