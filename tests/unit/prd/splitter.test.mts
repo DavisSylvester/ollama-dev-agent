@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { splitTask, applySplit, canSplit, canSplitForSize, MAX_SPLIT_DEPTH } from '../../../src/prd/splitter.mts';
+import { splitTask, applySplit, canSplit, canSplitForSize, buildChildTasks, MAX_SPLIT_DEPTH } from '../../../src/prd/splitter.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -113,6 +113,22 @@ describe('canSplitForSize', () => {
   });
   it('refuses once split depth is reached', () => {
     expect(canSplitForSize(parent({ splitDepth: 1 }))).toBe(false);
+  });
+});
+
+describe('buildChildTasks', () => {
+  it('re-IDs children, inherits domain, and wires foundation-first deps', () => {
+    const p = parent({ id: 'TASK-007', dependsOn: ['TASK-001'] });
+    const children = buildChildTasks(p, [
+      { name: 'schema', description: 'ds', acceptanceCriteria: 'as' },
+      { name: 'repo', description: 'dr', acceptanceCriteria: 'ar' },
+    ]);
+    expect(children.map((c) => c.id)).toEqual(['TASK-007-1', 'TASK-007-2']);
+    expect(children.every((c) => c.domain === 'database')).toBe(true);
+    expect(children[0]!.dependsOn).toEqual(['TASK-001']); // inherits parent's external deps
+    expect(children[1]!.dependsOn).toEqual(['TASK-007-1']); // followers depend on the first
+    expect(children.every((c) => c.splitDepth === 1)).toBe(true);
+    expect(children.every((c) => c.size === undefined)).toBe(true); // re-sized later
   });
 });
 

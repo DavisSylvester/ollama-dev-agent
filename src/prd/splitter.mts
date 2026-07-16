@@ -72,6 +72,37 @@ function extractContent(aiMessage: AIMessage): string {
   return String(content);
 }
 
+export interface ChildStory {
+  name: string;
+  description: string;
+  acceptanceCriteria: string;
+  testCommand?: string;
+}
+
+/**
+ * Build re-IDed child tasks from a parent and a list of proposed stories.
+ * The first child inherits the parent's external dependencies; the rest depend
+ * on the first (foundation first, followers parallelize). Children stay in the
+ * parent's domain and carry the incremented split depth; `size` is left absent
+ * so the sizer re-sizes them.
+ */
+export function buildChildTasks(parent: Task, stories: readonly ChildStory[]): Task[] {
+  const depth = (parent.splitDepth ?? 0) + 1;
+  const firstId = `${parent.id}-1`;
+  return stories.map((s, i) => ({
+    id: `${parent.id}-${i + 1}`,
+    name: s.name,
+    description: s.description,
+    acceptanceCriteria: s.acceptanceCriteria,
+    testCommand: s.testCommand ?? parent.testCommand,
+    domain: parent.domain,
+    dependsOn: i === 0 ? [...parent.dependsOn] : [firstId],
+    status: 'pending' as const,
+    iterationCount: 0,
+    splitDepth: depth,
+  }));
+}
+
 /**
  * Ask the planner to decompose a failed task into smaller sub-tasks.
  * Returns re-IDed sub-tasks (`<parentId>-1`, `-2`, …): the first inherits the
@@ -104,22 +135,15 @@ export async function splitTask(
     return [];
   }
 
-  const depth = (task.splitDepth ?? 0) + 1;
-  const firstId = `${task.id}-1`;
-  const subTasks: Task[] = parsed.map((sub, i) => {
-    // Omit `size` so it is absent (not undefined) — re-sized by the sizer after split.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { size: _omit, ...subWithoutSize } = sub;
-    return {
-      ...subWithoutSize,
-      id: `${task.id}-${i + 1}`,
-      domain: task.domain, // children stay in the parent's functional area
-      dependsOn: i === 0 ? [...task.dependsOn] : [firstId],
-      status: 'pending' as const,
-      iterationCount: 0,
-      splitDepth: depth,
-    };
-  });
+  const subTasks = buildChildTasks(
+    task,
+    parsed.map((sub) => ({
+      name: sub.name,
+      description: sub.description,
+      acceptanceCriteria: sub.acceptanceCriteria,
+      testCommand: sub.testCommand,
+    })),
+  );
 
   logger.info({ taskId: task.id, subTasks: subTasks.map((s) => s.id) }, 'splitter.split');
   return subTasks;
