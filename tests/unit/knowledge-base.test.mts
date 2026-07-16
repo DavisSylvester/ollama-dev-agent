@@ -13,6 +13,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     acceptanceCriteria: 'It works',
     testCommand: 'bun test',
     dependsOn: [],
+    domain: 'services',
     status: 'pending',
     iterationCount: 0,
     ...overrides,

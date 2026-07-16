@@ -10,6 +10,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     acceptanceCriteria: 'server boots; /health 200; validation works',
     testCommand: 'bun test',
     dependsOn: [],
+    domain: 'api',
     status: 'failed',
     iterationCount: 4,
     ...overrides,

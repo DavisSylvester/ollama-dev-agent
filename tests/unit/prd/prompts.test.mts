@@ -17,6 +17,7 @@ const PENDING_TASK: Task = {
   acceptanceCriteria: 'tsconfig.json exists with strict:true',
   testCommand: 'bun run build',
   dependsOn: [],
+  domain: 'services',
   status: 'pending',
   iterationCount: 0,
 };
