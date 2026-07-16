@@ -1,6 +1,10 @@
 import type { Task, TaskSize } from '../types/index.mts';
 import { TASK_DOMAINS, DOMAIN_KEYWORDS } from '../types/index.mts';
 import { env } from '../env.mts';
+import { createChatModel } from '../models/index.mts';
+import { buildSizingPrompt } from './prompts.mts';
+import { HumanMessage, SystemMessage, type AIMessage } from '@langchain/core/messages';
+import { logger } from '../logger.mts';
 
 export interface SizingSignals {
   readonly criteriaCount: number;
@@ -39,4 +43,69 @@ export function applyDeterministicFloor(task: Task, modelSize: TaskSize): TaskSi
     return 'L';
   }
   return modelSize;
+}
+
+export interface SizerDeps {
+  readonly invokeFn?: (systemPrompt: string, userPrompt: string) => Promise<string>;
+}
+
+function extractContent(aiMessage: AIMessage): string {
+  const content = aiMessage.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b) =>
+        typeof b === 'string'
+          ? b
+          : typeof b === 'object' && b !== null && 'text' in b && typeof (b as { text: unknown }).text === 'string'
+            ? (b as { text: string }).text
+            : '',
+      )
+      .join('');
+  }
+  return String(content);
+}
+
+function parseSize(raw: string): TaskSize | null {
+  const v = raw.trim().toUpperCase();
+  return v === 'S' || v === 'M' || v === 'L' ? v : null;
+}
+
+// Ask the planner to size each task. Returns id -> TaskSize; any task the model
+// omits or garbles defaults to 'M' (the deterministic floor still applies later).
+export async function getModelSizes(
+  tasks: readonly Task[],
+  deps?: SizerDeps,
+): Promise<Map<string, TaskSize>> {
+  const systemPrompt = buildSizingPrompt(tasks);
+  const userPrompt = 'Size every task now.';
+
+  let raw: string;
+  if (deps?.invokeFn) {
+    raw = await deps.invokeFn(systemPrompt, userPrompt);
+  } else {
+    const model = createChatModel(env.PLANNER_MODEL);
+    const res = (await model.invoke([
+      new SystemMessage(systemPrompt),
+      new HumanMessage(userPrompt),
+    ])) as AIMessage;
+    raw = extractContent(res);
+  }
+
+  const sizes = new Map<string, TaskSize>();
+  const linePattern = /(TASK-[\w-]+)\s*:\s*([SML])/gi;
+  let m: RegExpExecArray | null;
+  while ((m = linePattern.exec(raw)) !== null) {
+    const size = parseSize(m[2]!);
+    if (size) sizes.set(m[1]!, size);
+  }
+
+  for (const task of tasks) {
+    if (!sizes.has(task.id)) {
+      logger.warn({ taskId: task.id }, 'sizer.model_size_missing_defaulted');
+      sizes.set(task.id, 'M');
+    }
+  }
+
+  return sizes;
 }

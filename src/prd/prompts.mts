@@ -131,6 +131,36 @@ These are hard constraints — the planner must reflect them in tasks and Techni
 User prompt: ${userPrompt}`;
 }
 
+export function buildSizingPrompt(tasks: readonly Task[]): string {
+  const rows = tasks
+    .map(
+      (t) =>
+        `- ${t.id} [${t.domain}]: ${t.name}\n  Description: ${t.description}\n  Acceptance: ${t.acceptanceCriteria}`,
+    )
+    .join('\n');
+
+  return `You are the Story Sizer. You own exactly one question: does each task fit in a single builder agent's focused pass without exhausting its context?
+
+Assign each task a T-shirt size:
+- **S** — trivially one pass.
+- **M** — one pass, meaningful but bounded.
+- **L** — will NOT fit one pass; must be split.
+
+Judge by concrete signals: files/modules touched; count of schemas / ports / services / routes / components; whether it spans more than one concern or domain; unknowns. A task spanning many endpoints, many collections, or a whole feature's UI is almost always L.
+
+## Tasks to size
+${rows}
+
+## Output format — STRICT
+Output ONLY one line per task, nothing else:
+
+TASK-001: S
+TASK-002: M
+TASK-003: L
+
+Use the exact task ids above. Do not add commentary.`;
+}
+
 export function buildWorkerPrompt(
   task: Task,
   iteration: number,

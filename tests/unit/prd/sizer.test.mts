@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { computeSignals, applyDeterministicFloor } from '../../../src/prd/sizer.mts';
+import { computeSignals, applyDeterministicFloor, getModelSizes } from '../../../src/prd/sizer.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -51,5 +51,25 @@ describe('applyDeterministicFloor', () => {
       description: 'build an Angular component and a Mongo repository',
     });
     expect(applyDeterministicFloor(task, 'M')).toBe('L');
+  });
+});
+
+describe('getModelSizes', () => {
+  it('parses TASK-ID: SIZE lines from the model output', async () => {
+    const tasks = [
+      makeTask({ id: 'TASK-001' }),
+      makeTask({ id: 'TASK-002' }),
+    ];
+    const sizes = await getModelSizes(tasks, {
+      invokeFn: async () => 'TASK-001: S\nTASK-002: M',
+    });
+    expect(sizes.get('TASK-001')).toBe('S');
+    expect(sizes.get('TASK-002')).toBe('M');
+  });
+
+  it('defaults an unparseable/absent task to M', async () => {
+    const tasks = [makeTask({ id: 'TASK-001' })];
+    const sizes = await getModelSizes(tasks, { invokeFn: async () => 'garbage' });
+    expect(sizes.get('TASK-001')).toBe('M');
   });
 });
