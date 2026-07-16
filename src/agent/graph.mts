@@ -12,6 +12,7 @@ import { RalphLoop } from '../ralph/index.mts';
 import { ContextManager } from '../ralph/context-manager.mts';
 import { createWorkerTools } from '../tools/index.mts';
 import { env } from '../env.mts';
+import { saveRunState, buildRunState } from './run-state.mts';
 import type { AgentStateType } from './state.mts';
 import type { Task } from '../types/index.mts';
 
@@ -99,6 +100,20 @@ export async function sizePlanNode(
   const resultsDir = join('feature-results', state.featureSlug);
   await mkdir(resultsDir, { recursive: true });
   await writeFile(join(resultsDir, 'SIZING.md'), sizingMarkdown, 'utf-8');
+
+  await saveRunState(
+    buildRunState({
+      featureSlug: state.featureSlug,
+      featureName: state.featureName,
+      userPrompt: state.userPrompt,
+      prdFile: state.prdFile,
+      workingDirectory: state.workingDirectory,
+      prd: state.prd,
+      tasks: result.tasks,
+    }),
+  ).catch(() => {
+    // Persistence is best-effort — a write failure must not abort the run.
+  });
 
   return { tasks: result.tasks, phase: 'awaiting_approval' };
 }
@@ -220,6 +235,20 @@ async function runTaskNode(
       // Splitting is best-effort — leave the task failed if it throws.
     }
   }
+
+  await saveRunState(
+    buildRunState({
+      featureSlug: state.featureSlug,
+      featureName: state.featureName,
+      userPrompt: state.userPrompt,
+      prdFile: state.prdFile,
+      workingDirectory: state.workingDirectory,
+      prd: state.prd,
+      tasks: mergedTasks,
+    }),
+  ).catch(() => {
+    // Best-effort — do not abort the run on a state write failure.
+  });
 
   return {
     tasks: mergedTasks,
