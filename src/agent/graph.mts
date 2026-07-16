@@ -17,11 +17,11 @@ import type { Task } from '../types/index.mts';
 
 // --- Node: draft_plan ---
 
-async function draftPlanNode(
+export async function draftPlanNode(
   state: AgentStateType,
 ): Promise<Partial<AgentStateType>> {
-  // Skip generation if a PRD was pre-loaded (e.g. via --prd-file)
-  if (state.prd !== null) {
+  // Skip generation on resume, or if a PRD was pre-loaded (e.g. via --prd-file)
+  if (state.resumed || state.prd !== null) {
     return { phase: 'sizing_plan' };
   }
 
@@ -58,9 +58,15 @@ async function draftPlanNode(
 // proactively splits any `L` into S/M children, and refuses to proceed if an
 // oversized task survives. Writes SIZING.md alongside the other planning docs.
 
-async function sizePlanNode(
+export async function sizePlanNode(
   state: AgentStateType,
 ): Promise<Partial<AgentStateType>> {
+  // On resume the plan is already sized/split and loaded from state.json —
+  // do not re-size, re-debate, or rewrite SIZING.md.
+  if (state.resumed) {
+    return { phase: 'awaiting_approval' };
+  }
+
   emitAgentEvent('phase_changed', { phase: 'sizing_plan' });
 
   let result: Awaited<ReturnType<typeof sizePlan>>;
@@ -102,7 +108,7 @@ async function sizePlanNode(
 // Placeholder for the ratifying council. In Phase A it passes the sized plan
 // through unchanged. Phase B replaces this with a debate-and-ratify pass.
 
-async function ratifyPlanNode(
+export async function ratifyPlanNode(
   _state: AgentStateType,
 ): Promise<Partial<AgentStateType>> {
   return { phase: 'awaiting_approval' };
