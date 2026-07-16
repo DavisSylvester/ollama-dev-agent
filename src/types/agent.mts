@@ -37,12 +37,14 @@ export interface AgentConfig {
   readonly maxIterations?: number;
   readonly maxReactSteps?: number;
   readonly prdFile?: string;
+  readonly fresh?: boolean;
 }
 
 export type AgentEventType =
   | 'phase_changed'
   | 'prd_generated'
   | 'plan_sized'
+  | 'run_resumed'
   | 'prd_approved'
   | 'task_started'
   | 'task_complete'
