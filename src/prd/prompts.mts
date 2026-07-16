@@ -1,4 +1,5 @@
 import type { Task } from '../types/index.mts';
+import type { DebatePersona, ProposedStory, PersonaStance } from './debate.mts';
 import { env } from '../env.mts';
 
 export function buildPRDGenerationPrompt(userPrompt: string, research: boolean = true): string {
@@ -159,6 +160,100 @@ TASK-002: M
 TASK-003: L
 
 Use the exact task ids above. Do not add commentary.`;
+}
+
+export const PERSONA_BRIEF: Record<DebatePersona, string> = {
+  scrum_master:
+    'the Scrum Master. You judge stories by INVEST — independent, negotiable, valuable, estimable, small, testable. You push for thin vertical slices.',
+  solution_architect:
+    'the Solution Architect. You judge technical decomposition and clean module boundaries. You hold the final decision.',
+  sme:
+    'the Subject Matter Expert. You judge domain correctness and whether the split fully covers the original acceptance criteria.',
+  developer:
+    'the Developer. You judge implementation feasibility — whether each story fits a single focused pass without exhausting context.',
+};
+
+function storiesBlock(stories: readonly ProposedStory[]): string {
+  return stories
+    .map(
+      (s, i) =>
+        `${i + 1}. ${s.name}\n   Description: ${s.description}\n   Acceptance: ${s.acceptanceCriteria}`,
+    )
+    .join('\n');
+}
+
+export function buildDebateProposalPrompt(task: Task): string {
+  return `You are the Solution Architect opening a design debate about an oversized (size L) task.
+
+## The oversized task
+${task.id} [${task.domain}]: ${task.name}
+Description: ${task.description}
+Acceptance: ${task.acceptanceCriteria}
+
+## Your job
+Propose an initial breakdown into 2 to 4 smaller stories, each completable in one focused pass (roughly one module plus its test). Together they MUST fully cover the original acceptance criteria, and every story stays within the "${task.domain}" domain.
+
+Output ONLY a JSON array, nothing else:
+
+[
+  { "name": "<short story name>", "description": "<one focused concern>", "acceptanceCriteria": "<specific, verifiable criteria>" }
+]`;
+}
+
+export function buildPersonaCritiquePrompt(
+  persona: DebatePersona,
+  task: Task,
+  proposal: readonly ProposedStory[],
+  round: number,
+): string {
+  return `You are ${PERSONA_BRIEF[persona]}
+
+This is round ${round} of a debate about how to break down an oversized task.
+
+## Original task
+${task.id} [${task.domain}]: ${task.name}
+Acceptance: ${task.acceptanceCriteria}
+
+## Current proposed breakdown
+${storiesBlock(proposal)}
+
+## Your job
+Critique THIS breakdown strictly from your perspective. Decide whether it is good enough to build ("agree") or still needs revision ("revise").
+
+Output ONLY a JSON object, nothing else:
+
+{ "verdict": "agree" | "revise", "comments": "<one or two sentences of specific critique>" }`;
+}
+
+export function buildDebateSynthesisPrompt(
+  task: Task,
+  proposal: readonly ProposedStory[],
+  stances: readonly PersonaStance[],
+): string {
+  const feedback = stances
+    .map((s) => `- ${s.persona} (${s.verdict}): ${s.comments}`)
+    .join('\n');
+
+  return `You are the Solution Architect. Revise the proposed breakdown using the panel's feedback.
+
+## Original task
+${task.id} [${task.domain}]: ${task.name}
+Acceptance: ${task.acceptanceCriteria}
+
+## Current proposed breakdown
+${storiesBlock(proposal)}
+
+## Panel feedback
+${feedback}
+
+## Your job
+Produce a revised breakdown of 2 to 4 stories that addresses the feedback, still fully covers the original acceptance criteria, and keeps every story single-pass and within the "${task.domain}" domain.
+
+Output ONLY a JSON array, nothing else:
+
+[
+  { "name": "<short story name>", "description": "<one focused concern>", "acceptanceCriteria": "<specific, verifiable criteria>" }
+]`;
 }
 
 export function buildSplitRecommendationPrompt(

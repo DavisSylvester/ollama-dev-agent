@@ -3,6 +3,9 @@ import {
   buildWorkerPrompt,
   buildReviewerPrompt,
   buildPRDGenerationPrompt,
+  buildDebateProposalPrompt,
+  buildPersonaCritiquePrompt,
+  buildDebateSynthesisPrompt,
 } from '../../../src/prd/prompts.mts';
 import type { Task } from '../../../src/types/index.mts';
 
@@ -317,5 +320,37 @@ describe('buildPRDGenerationPrompt — domain partitioning', () => {
     const prompt = buildPRDGenerationPrompt('build a notes app', false);
     expect(prompt).toContain('**Domain**');
     expect(prompt).toContain('ui, api, services, database, auth, iac, e2e, ci');
+  });
+});
+
+describe('debate prompts', () => {
+  const task: Task = {
+    id: 'TASK-001', name: 'big', description: 'build the whole thing',
+    acceptanceCriteria: 'a; b; c', testCommand: 'bun test', dependsOn: [],
+    domain: 'database', status: 'pending', iterationCount: 0,
+  };
+
+  it('proposal prompt asks the architect for a JSON array of stories', () => {
+    const p = buildDebateProposalPrompt(task);
+    expect(p).toContain('Solution Architect');
+    expect(p).toContain('acceptanceCriteria');
+    expect(p).toContain(task.id);
+  });
+
+  it('critique prompt frames the persona and asks for a verdict', () => {
+    const p = buildPersonaCritiquePrompt('scrum_master', task, [
+      { name: 's', description: 'd', acceptanceCriteria: 'a' },
+    ], 1);
+    expect(p).toContain('Scrum Master');
+    expect(p).toContain('verdict');
+    expect(p.toLowerCase()).toContain('agree');
+  });
+
+  it("synthesis prompt includes the personas' comments", () => {
+    const p = buildDebateSynthesisPrompt(task, [
+      { name: 's', description: 'd', acceptanceCriteria: 'a' },
+    ], [{ persona: 'developer', verdict: 'revise', comments: 'too big still' }]);
+    expect(p).toContain('too big still');
+    expect(p).toContain('acceptanceCriteria');
   });
 });
