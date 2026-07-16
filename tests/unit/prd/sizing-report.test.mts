@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import { buildSizingReport } from '../../../src/prd/sizing-report.mts';
 import type { SizedPlanResult } from '../../../src/prd/sizer.mts';
-import type { Task } from '../../../src/types/index.mts';
+import type { Task, TaskDomain, TaskSize } from '../../../src/types/index.mts';
 
-function task(id: string, domain: Task['domain'], size: Task['size']): Task {
+function task(id: string, domain: TaskDomain, size: TaskSize): Task {
   return {
     id, name: `name ${id}`, description: '', acceptanceCriteria: '',
     testCommand: 'bun test', dependsOn: [], domain, size,
