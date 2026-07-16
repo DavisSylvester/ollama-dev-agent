@@ -1,5 +1,5 @@
 import type { Task, ReviewDecision, ChecklistItem } from '../types/index.mts';
-import { createChatModel } from '../models/index.mts';
+import { createChatModel, withOllamaRetry } from '../models/index.mts';
 import { SystemMessage, HumanMessage, type AIMessage } from '@langchain/core/messages';
 import { buildReviewerPrompt } from '../prd/index.mts';
 import { env } from '../env.mts';
@@ -31,7 +31,10 @@ async function invokeReviewerWithRetry(
     new HumanMessage(userPrompt),
   ];
 
-  const firstMessage = (await model.invoke(baseMessages)) as AIMessage;
+  const firstMessage = (await withOllamaRetry(
+    () => model.invoke(baseMessages),
+    { label: 'reviewer.invoke' },
+  )) as AIMessage;
   let response = extractContent(firstMessage);
 
   for (let retry = 0; retry < MAX_REVIEWER_DECISION_RETRIES && !hasDecision(response); retry++) {
@@ -39,17 +42,21 @@ async function invokeReviewerWithRetry(
       { taskId, retry: retry + 1, responseLength: response.length },
       'reviewer.missing_decision_retry',
     );
-    const retryMessage = (await model.invoke([
-      ...baseMessages,
-      firstMessage,
-      new HumanMessage(
-        'Your response is missing the required DECISION line. ' +
-        'You MUST end your response with exactly one of:\n\n' +
-        'DECISION: SHIP\n\nor\n\n' +
-        'DECISION: REVISE\nISSUES:\n- <specific issue>\n\n' +
-        'Provide your complete review and decision now.',
-      ),
-    ])) as AIMessage;
+    const retryMessage = (await withOllamaRetry(
+      () =>
+        model.invoke([
+          ...baseMessages,
+          firstMessage,
+          new HumanMessage(
+            'Your response is missing the required DECISION line. ' +
+            'You MUST end your response with exactly one of:\n\n' +
+            'DECISION: SHIP\n\nor\n\n' +
+            'DECISION: REVISE\nISSUES:\n- <specific issue>\n\n' +
+            'Provide your complete review and decision now.',
+          ),
+        ]),
+      { label: 'reviewer.invoke' },
+    )) as AIMessage;
     response = extractContent(retryMessage);
   }
 

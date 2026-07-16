@@ -62,8 +62,31 @@ async function runTaskNode(
   const readyTasks = findReadyTasks(state.tasks);
 
   if (readyTasks.length === 0) {
-    // Nothing ready — all remaining tasks are either blocked or there are none
-    return { phase: 'executing_tasks' };
+    // Nothing is ready. Any tasks still pending are permanently blocked by a
+    // failed dependency and can never run. Mark them failed so (a) the run
+    // terminates instead of looping forever (routeAfterTask would otherwise see
+    // pending tasks and route back here with no progress), and (b) the results
+    // reflect reality.
+    const blocked = state.tasks.filter((t) => t.status === 'pending');
+    if (blocked.length === 0) {
+      return { phase: 'executing_tasks' };
+    }
+
+    const blockedIds = new Set(blocked.map((t) => t.id));
+    const mergedTasks: Task[] = state.tasks.map((t) =>
+      blockedIds.has(t.id) ? { ...t, status: 'failed' as const } : t,
+    );
+
+    for (const t of blocked) {
+      emitAgentEvent('task_failed', {
+        taskId: t.id,
+        taskName: t.name,
+        iterations: 0,
+        reason: 'Blocked by a failed dependency',
+      });
+    }
+
+    return { tasks: mergedTasks, phase: 'executing_tasks' };
   }
 
   // Mark ready tasks as in_progress before launching

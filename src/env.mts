@@ -1,4 +1,13 @@
 import { z } from 'zod';
+import { config as loadDotenv } from 'dotenv';
+import { join } from 'node:path';
+
+// Load THIS package's .env regardless of the process cwd. Without this, the
+// global `oda` command run from another directory falls back to schema defaults
+// (local ollama + qwen3-coder/devstral), ignoring the configured cloud models.
+// override:true so ODA's own config wins over a stray .env in the invocation dir.
+// CLI flags still take precedence — they are applied after via applyEnvOverrides.
+loadDotenv({ path: join(import.meta.dir, '..', '.env'), override: true });
 
 const envSchema = z.object({
   OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),

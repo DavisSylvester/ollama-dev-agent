@@ -6,6 +6,7 @@ import {
   ToolMessage,
   type AIMessage,
 } from '@langchain/core/messages';
+import { withOllamaRetry } from './ollama-client.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 import { DateTime } from 'luxon';
@@ -13,43 +14,18 @@ import { DateTime } from 'luxon';
 // ---------------------------------------------------------------------------
 // LLM invoke retry — wraps the model call with exponential backoff so
 // transient Ollama timeouts / connection drops don't fail the whole task.
+// Detection + backoff live in withOllamaRetry (ollama-client) so the worker and
+// reviewer share one source of truth for what counts as a transient error.
 // ---------------------------------------------------------------------------
-
-const MAX_INVOKE_RETRIES = 2;
-const INVOKE_RETRY_BASE_MS = 3000;
-
-function isRetryableError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const msg = err.message.toLowerCase();
-  return (
-    msg.includes('timeout') ||
-    msg.includes('timed out') ||
-    msg.includes('econnreset') ||
-    msg.includes('econnrefused') ||
-    msg.includes('socket') ||
-    msg.includes('network') ||
-    msg.includes('fetch failed')
-  );
-}
 
 async function invokeWithRetry(
   model: BaseChatModel,
   messages: Parameters<BaseChatModel['invoke']>[0],
 ): Promise<AIMessage> {
-  for (let attempt = 0; attempt <= MAX_INVOKE_RETRIES; attempt++) {
-    try {
-      return (await model.invoke(messages)) as AIMessage;
-    } catch (err) {
-      if (attempt === MAX_INVOKE_RETRIES || !isRetryableError(err)) throw err;
-      const delayMs = INVOKE_RETRY_BASE_MS * (attempt + 1);
-      logger.warn(
-        { attempt: attempt + 1, maxRetries: MAX_INVOKE_RETRIES, delayMs, error: String(err) },
-        'react_agent.invoke_retry',
-      );
-      await Bun.sleep(delayMs);
-    }
-  }
-  throw new Error('invokeWithRetry: unreachable');
+  return withOllamaRetry(
+    async () => (await model.invoke(messages)) as AIMessage,
+    { label: 'worker.invoke' },
+  );
 }
 
 // Exported so loop.mts (and tests) can detect a timed-out worker without
