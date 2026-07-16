@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { splitTask, applySplit, canSplit, MAX_SPLIT_DEPTH } from '../../../src/prd/splitter.mts';
+import { splitTask, applySplit, canSplit, canSplitForSize, MAX_SPLIT_DEPTH } from '../../../src/prd/splitter.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -68,6 +68,51 @@ describe('splitTask', () => {
   it('returns [] when decomposition yields no tasks', async () => {
     const subs = await splitTask(makeTask(), '', { invokeFn: async () => 'no tasks here' });
     expect(subs).toEqual([]);
+  });
+});
+
+function parent(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 'TASK-003',
+    name: 'big task',
+    description: 'lots of work',
+    acceptanceCriteria: 'many things',
+    testCommand: 'bun test',
+    dependsOn: [],
+    domain: 'database',
+    status: 'pending',
+    iterationCount: 0,
+    ...overrides,
+  };
+}
+
+describe('splitTask — domain inheritance', () => {
+  it('gives every child the parent domain', async () => {
+    const children = await splitTask(parent(), '', {
+      invokeFn: async () =>
+        [
+          '- [ ] **TASK-1**: schema',
+          '  - **Description**: define schema',
+          '  - **Acceptance**: schema exists',
+          '  - **Test Command**: `bun test`',
+          '- [ ] **TASK-2**: repo',
+          '  - **Description**: build repo',
+          '  - **Acceptance**: repo works',
+          '  - **Test Command**: `bun test`',
+        ].join('\n'),
+    });
+    expect(children).toHaveLength(2);
+    expect(children.every((c) => c.domain === 'database')).toBe(true);
+    expect(children.every((c) => c.size === undefined)).toBe(true);
+  });
+});
+
+describe('canSplitForSize', () => {
+  it('allows splitting an original task', () => {
+    expect(canSplitForSize(parent())).toBe(true);
+  });
+  it('refuses once split depth is reached', () => {
+    expect(canSplitForSize(parent({ splitDepth: 1 }))).toBe(false);
   });
 });
 

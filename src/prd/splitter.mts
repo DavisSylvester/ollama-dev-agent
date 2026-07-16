@@ -19,6 +19,12 @@ export function canSplit(task: Task): boolean {
   return env.AUTO_SPLIT_ON_FAILURE && (task.splitDepth ?? 0) < MAX_SPLIT_DEPTH;
 }
 
+// Proactive (plan-time) split gate. Unlike canSplit it is NOT tied to the
+// AUTO_SPLIT_ON_FAILURE runtime flag — proactive sizing always splits an `L`.
+export function canSplitForSize(task: Task): boolean {
+  return (task.splitDepth ?? 0) < MAX_SPLIT_DEPTH;
+}
+
 function buildSplitPrompt(task: Task, failureContext: string): string {
   return `You are decomposing a software task that FAILED because it was too large to complete in one focused pass.
 
@@ -100,14 +106,20 @@ export async function splitTask(
 
   const depth = (task.splitDepth ?? 0) + 1;
   const firstId = `${task.id}-1`;
-  const subTasks: Task[] = parsed.map((sub, i) => ({
-    ...sub,
-    id: `${task.id}-${i + 1}`,
-    dependsOn: i === 0 ? [...task.dependsOn] : [firstId],
-    status: 'pending' as const,
-    iterationCount: 0,
-    splitDepth: depth,
-  }));
+  const subTasks: Task[] = parsed.map((sub, i) => {
+    // Omit `size` so it is absent (not undefined) — re-sized by the sizer after split.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { size: _omit, ...subWithoutSize } = sub;
+    return {
+      ...subWithoutSize,
+      id: `${task.id}-${i + 1}`,
+      domain: task.domain, // children stay in the parent's functional area
+      dependsOn: i === 0 ? [...task.dependsOn] : [firstId],
+      status: 'pending' as const,
+      iterationCount: 0,
+      splitDepth: depth,
+    };
+  });
 
   logger.info({ taskId: task.id, subTasks: subTasks.map((s) => s.id) }, 'splitter.split');
   return subTasks;
