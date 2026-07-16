@@ -45,6 +45,16 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
+  // Per-persona model overrides for the L-task debate forum. Unset => the
+  // resolver falls back to the tiered defaults (SA/SME => PLANNER, Scrum/Dev
+  // => CODER). Kept optional so zero config is required.
+  DEBATE_ARCHITECT_MODEL: z.string().optional(),
+  DEBATE_SME_MODEL: z.string().optional(),
+  DEBATE_SCRUM_MODEL: z.string().optional(),
+  DEBATE_DEV_MODEL: z.string().optional(),
+  // Max debate rounds before the Solution Architect decides unilaterally.
+  // Hard-capped at 4 by product decision.
+  DEBATE_MAX_ROUNDS: z.coerce.number().int().min(1).max(4).default(4),
   NUM_CTX: z.coerce.number().int().min(2048).default(32768),
   BRAVE_API_KEY: z.string().optional(),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
