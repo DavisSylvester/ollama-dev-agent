@@ -72,6 +72,7 @@ async function sizePlanNode(
         phase: 'sizing_plan',
         message: err.message,
         unsplittableIds: err.unsplittableIds,
+        recommendations: err.recommendations,
       });
     }
     throw err; // abort the run — an oversized task must not execute
@@ -80,6 +81,7 @@ async function sizePlanNode(
   emitAgentEvent('plan_sized', {
     distribution: result.distribution,
     splits: result.splits,
+    recommendations: result.recommendations,
     taskCount: result.tasks.length,
   });
 
@@ -200,7 +202,7 @@ async function runTaskNode(
     try {
       const subTasks = await splitTask(failed, failureContext);
       if (subTasks.length > 0) {
-        const sized = await sizePlan(subTasks).catch(() => ({ tasks: subTasks, distribution: { S: 0, M: 0, L: 0 }, splits: [] }));
+        const sized = await sizePlan(subTasks).catch(() => ({ tasks: subTasks, distribution: { S: 0, M: 0, L: 0 }, splits: [], recommendations: [] }));
         mergedTasks = applySplit(mergedTasks, failed.id, sized.tasks);
         emitAgentEvent('task_split', {
           taskId: failed.id,
