@@ -108,6 +108,7 @@ export interface DebateDeps {
   proposeFn?: (task: Task) => Promise<string>;
   critiqueFn?: (persona: DebatePersona, task: Task, proposal: ProposedStory[], round: number) => Promise<string>;
   synthesizeFn?: (task: Task, proposal: ProposedStory[], stances: PersonaStance[]) => Promise<string>;
+  onEvent?: (type: string, payload: Record<string, unknown>) => void;
 }
 
 function extractContent(aiMessage: AIMessage): string {
@@ -161,6 +162,7 @@ export async function runDebate(task: Task, deps?: DebateDeps): Promise<DebateRe
   if (proposal.length === 0) {
     throw new DebateError(`Debate for ${task.id} produced no opening proposal`);
   }
+  deps?.onEvent?.('debate_started', { taskId: task.id, taskName: task.name });
 
   const rounds: DebateRound[] = [];
   let decidedBy: DebateResult['decidedBy'] = 'architect';
@@ -169,7 +171,15 @@ export async function runDebate(task: Task, deps?: DebateDeps): Promise<DebateRe
   for (let round = 1; round <= maxRounds; round++) {
     const stances: PersonaStance[] = [];
     for (const persona of DEBATE_PERSONAS) {
-      stances.push(parseStance(persona, await critique(persona, task, proposal, round)));
+      const stance = parseStance(persona, await critique(persona, task, proposal, round));
+      stances.push(stance);
+      deps?.onEvent?.('persona_stance', {
+        taskId: task.id,
+        round,
+        persona: stance.persona,
+        verdict: stance.verdict,
+        comments: stance.comments,
+      });
     }
     rounds.push({ round, proposal, stances });
 
@@ -187,6 +197,7 @@ export async function runDebate(task: Task, deps?: DebateDeps): Promise<DebateRe
   }
 
   logger.info({ taskId: task.id, decidedBy, rounds: rounds.length }, 'debate.decided');
+  deps?.onEvent?.('debate_decided', { taskId: task.id, decidedBy, storyCount: proposal.length });
   return {
     taskId: task.id,
     taskName: task.name,

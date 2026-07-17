@@ -134,6 +134,19 @@ describe('sizePlan', () => {
     expect(result.oversized).toEqual(['TASK-001']);
   });
 
+  it('emits sizing_started and a task_sized per task', async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    await sizePlan([makeTask({ id: 'TASK-001' }), makeTask({ id: 'TASK-002' })], {
+      sizeFn: async () => new Map([['TASK-001', 'M'], ['TASK-002', 'S']]),
+      onEvent: (type, payload) => events.push({ type, payload }),
+    });
+    expect(events[0]?.type).toBe('sizing_started');
+    expect(events[0]?.payload.taskCount).toBe(2);
+    const sized = events.filter((e) => e.type === 'task_sized').map((e) => e.payload.taskId);
+    expect(sized).toContain('TASK-001');
+    expect(sized).toContain('TASK-002');
+  });
+
   describe('strict gate (SIZE_ENFORCE_GATE=true)', () => {
     afterEach(() => applyEnvOverrides({ SIZE_ENFORCE_GATE: false }));
 

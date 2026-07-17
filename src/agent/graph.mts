@@ -84,7 +84,9 @@ export async function sizePlanNode(
 
   let result: Awaited<ReturnType<typeof sizePlan>>;
   try {
-    result = await sizePlan(state.tasks);
+    result = await sizePlan(state.tasks, {
+      onEvent: (type, payload) => emitAgentEvent(type, payload),
+    });
   } catch (err) {
     if (err instanceof SizeGateError) {
       emitAgentEvent('error', {
