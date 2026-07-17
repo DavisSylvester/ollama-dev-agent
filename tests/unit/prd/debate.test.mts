@@ -78,3 +78,19 @@ describe('runDebate', () => {
     await expect(runDebate(makeTask(), deps)).rejects.toBeInstanceOf(DebateError);
   });
 });
+
+describe('runDebate feedback events', () => {
+  it('emits debate_started, one persona_stance per persona per round, and debate_decided', async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    await runDebate(makeTask(), {
+      proposeFn: async () => twoStories,
+      critiqueFn: async () => '{"verdict":"agree","comments":"ok"}',
+      onEvent: (type, payload) => events.push({ type, payload }),
+    });
+    expect(events.some((e) => e.type === 'debate_started')).toBe(true);
+    expect(events.filter((e) => e.type === 'persona_stance')).toHaveLength(4);
+    const decided = events.find((e) => e.type === 'debate_decided');
+    expect(decided?.payload.decidedBy).toBe('consensus');
+    expect(decided?.payload.storyCount).toBe(2);
+  });
+});
