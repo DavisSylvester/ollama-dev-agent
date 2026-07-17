@@ -6,6 +6,7 @@ import {
   buildDebateProposalPrompt,
   buildPersonaCritiquePrompt,
   buildDebateSynthesisPrompt,
+  buildDocSummaryPrompt,
 } from '../../../src/prd/prompts.mts';
 import type { Task } from '../../../src/types/index.mts';
 
@@ -352,5 +353,14 @@ describe('debate prompts', () => {
     ], [{ persona: 'developer', verdict: 'revise', comments: 'too big still' }]);
     expect(p).toContain('too big still');
     expect(p).toContain('acceptanceCriteria');
+  });
+});
+
+describe('buildDocSummaryPrompt', () => {
+  it('embeds the file path and content and asks for a concise extraction', () => {
+    const p = buildDocSummaryPrompt('memory/05-data-models.md', 'User has id and email.');
+    expect(p).toContain('memory/05-data-models.md');
+    expect(p).toContain('User has id and email.');
+    expect(p.toLowerCase()).toContain('summar');
   });
 });

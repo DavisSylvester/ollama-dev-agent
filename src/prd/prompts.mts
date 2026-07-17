@@ -256,6 +256,24 @@ Output ONLY a JSON array, nothing else:
 ]`;
 }
 
+export function buildDocSummaryPrompt(relPath: string, content: string): string {
+  return `You are condensing one project document so a planner can generate a PRD from many documents without exceeding its context.
+
+## Document: ${relPath}
+
+${content}
+
+## Your job
+Summarize THIS document concisely but completely for PRD generation. Capture, as compact bullets or prose:
+- purpose / what this document is about
+- concrete features and capabilities
+- entities / data models and key fields
+- API surface (endpoints, operations) if any
+- constraints, rules, and explicit technical decisions
+
+Do NOT use PRD or task formatting. Do NOT invent details not present in the document. Output only the summary.`;
+}
+
 export function buildWorkerPrompt(
   task: Task,
   iteration: number,
