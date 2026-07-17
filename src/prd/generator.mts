@@ -51,21 +51,24 @@ export async function generatePRD(
     );
   }
 
+  return buildPRDFromMarkdown(rawMarkdown, workingDirectory);
+}
+
+// Parse a raw PRD markdown into the structured PRD object and persist it to
+// .ai/planning/<featureSlug>/. Shared by generatePRD and generatePRDFromDocs.
+export async function buildPRDFromMarkdown(rawMarkdown: string, workingDirectory: string): Promise<PRD> {
   const featureName = extractFeatureName(rawMarkdown);
   const featureSlug = extractFeatureSlug(rawMarkdown);
   const tasks = parseTasks(rawMarkdown);
 
-  // Parse optional PRD sections for the structured object
   const overview = extractSection(rawMarkdown, 'Overview');
   const technicalApproach = extractSection(rawMarkdown, 'Technical Approach');
   const goals = extractBulletList(rawMarkdown, 'Goals');
   const acceptanceCriteria = extractBulletList(rawMarkdown, 'Acceptance Criteria');
   const outOfScope = extractBulletList(rawMarkdown, 'Out of Scope');
 
-  // Persist to .ai/planning/<featureSlug>/
   const planningDir = join(workingDirectory, '.ai', 'planning', featureSlug);
   await mkdir(planningDir, { recursive: true });
-
   await writeFile(join(planningDir, 'prd.md'), rawMarkdown, 'utf-8');
 
   const taskMarkdown = tasks
@@ -78,7 +81,6 @@ export async function generatePRD(
         `**Test Command**: \`${t.testCommand}\`\n`,
     )
     .join('\n---\n\n');
-
   await writeFile(join(planningDir, 'tasks.md'), taskMarkdown, 'utf-8');
 
   return {
