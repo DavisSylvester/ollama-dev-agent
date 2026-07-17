@@ -90,6 +90,15 @@ export function explainOversize(task: Task): { reasons: string[]; recommendation
 // model's size. The floor only ever raises size, never lowers it, and is tuned
 // to defer to the model except on unambiguous over-sizing.
 export function applyDeterministicFloor(task: Task, modelSize: TaskSize): TaskSize {
+  // A task that has already been deliberately decomposed (by the debate or the
+  // splitter) must NOT be force-promoted back to `L` by the free-text
+  // heuristics: a well-scoped child can still have >4 acceptance-criteria
+  // sentences, and forcing it to `L` at max split depth creates an
+  // unresolvable gate. Trust the model's size for split children.
+  if ((task.splitDepth ?? 0) > 0) {
+    return modelSize;
+  }
+
   const { criteriaCount, domainMentions } = computeSignals(task);
   const overCriteria = criteriaCount > env.SIZE_MAX_CRITERIA;
   const multiDomain = domainMentions >= MULTI_DOMAIN_THRESHOLD;
@@ -220,10 +229,15 @@ export interface SizedPlanResult {
   readonly distribution: Record<TaskSize, number>;
   readonly splits: Array<{ parentId: string; childIds: string[] }>;
   readonly recommendations: readonly SizeRecommendation[];
+  // Tasks that remain size `L` after the sizing passes. By default these are
+  // allowed to run as-is (the worker gets its full iteration budget); the run
+  // only aborts when SIZE_ENFORCE_GATE is explicitly enabled.
+  readonly oversized: readonly string[];
 }
 
-// Thrown when a task remains `L` and cannot be split further while the gate is
-// enforced. Aborts the run rather than executing an oversized task.
+// Thrown when a task remains `L` and cannot be split further AND the strict gate
+// (SIZE_ENFORCE_GATE) is enabled. Off by default — a surviving `L` is allowed to
+// run rather than aborting the whole plan.
 export class SizeGateError extends Error {
   constructor(
     public readonly unsplittableIds: string[],
@@ -306,12 +320,27 @@ export async function sizePlan(
 
   const recommendations = [...recMap.values()];
   const stillLarge = current.filter((t) => t.size === 'L').map((t) => t.id);
-  if (stillLarge.length > 0 && env.SIZE_ENFORCE_GATE) {
-    throw new SizeGateError(
-      stillLarge,
-      recommendations.filter((r) => stillLarge.includes(r.taskId)),
+
+  if (stillLarge.length > 0) {
+    // Strict opt-in: abort only when the gate is explicitly enforced. By default
+    // a task that is still `L` after the sizing passes is allowed to run as-is.
+    if (env.SIZE_ENFORCE_GATE) {
+      throw new SizeGateError(
+        stillLarge,
+        recommendations.filter((r) => stillLarge.includes(r.taskId)),
+      );
+    }
+    logger.warn(
+      { oversized: stillLarge },
+      'sizer.oversized_allowed', // still L after max passes — allowed to run
     );
   }
 
-  return { tasks: current, distribution: countSizes(current), splits, recommendations };
+  return {
+    tasks: current,
+    distribution: countSizes(current),
+    splits,
+    recommendations,
+    oversized: stillLarge,
+  };
 }

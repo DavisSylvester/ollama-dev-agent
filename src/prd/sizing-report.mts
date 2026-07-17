@@ -17,6 +17,11 @@ export function buildSizingReport(
       ? splits.map((s) => `- ${s.parentId} → ${s.childIds.join(', ')}`).join('\n')
       : '_No proactive splits were required._';
 
+  const oversizedRows =
+    result.oversized.length > 0
+      ? result.oversized.map((id) => `- ${id}`).join('\n')
+      : '_None._';
+
   const recRows =
     result.recommendations.length > 0
       ? result.recommendations
@@ -51,6 +56,10 @@ ${taskRows}
 ## Proactive Splits
 
 ${splitRows}
+
+## Allowed to run oversized (still L after sizing)
+
+${oversizedRows}
 
 ## Recommendations for Oversized Tasks
 
