@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, afterEach } from 'bun:test';
 import { computeSignals, applyDeterministicFloor, getModelSizes, sizePlan, SizeGateError, explainOversize, debateSplit } from '../../../src/prd/sizer.mts';
+import { applyEnvOverrides } from '../../../src/env.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -72,6 +73,17 @@ describe('applyDeterministicFloor', () => {
     });
     expect(applyDeterministicFloor(task, 'S')).toBe('S');
   });
+
+  it('defers to the model for an already-split child even with many criteria', () => {
+    // A well-scoped child can still have >4 acceptance-criteria sentences; the
+    // floor must not force it back to L (that dead-ends at max split depth).
+    const child = makeTask({
+      splitDepth: 1,
+      acceptanceCriteria: 'a. b. c. d. e. f.',
+    });
+    expect(applyDeterministicFloor(child, 'M')).toBe('M');
+    expect(applyDeterministicFloor(child, 'S')).toBe('S');
+  });
 });
 
 describe('getModelSizes', () => {
@@ -115,22 +127,35 @@ describe('sizePlan', () => {
     expect(result.recommendations).toHaveLength(1);
   });
 
-  it('hard-stops when an L cannot be split further', async () => {
+  it('allows an unsplittable L to stay L by default (no abort)', async () => {
     const tasks = [makeTask({ id: 'TASK-001', splitDepth: 1 })]; // already at max depth
-    await expect(
-      sizePlan(tasks, { sizeFn: async () => new Map([['TASK-001', 'L']]) }),
-    ).rejects.toBeInstanceOf(SizeGateError);
+    const result = await sizePlan(tasks, { sizeFn: async () => new Map([['TASK-001', 'L']]) });
+    expect(result.tasks[0]!.size).toBe('L');
+    expect(result.oversized).toEqual(['TASK-001']);
   });
 
-  it('includes recommendations in the gate error for unsplittable L tasks', async () => {
-    const tasks = [makeTask({ id: 'TASK-001', splitDepth: 1 })];
-    try {
-      await sizePlan(tasks, { sizeFn: async () => new Map([['TASK-001', 'L']]) });
-      throw new Error('should have thrown');
-    } catch (err) {
-      expect(err).toBeInstanceOf(SizeGateError);
-      expect((err as SizeGateError).recommendations).toHaveLength(1);
-    }
+  describe('strict gate (SIZE_ENFORCE_GATE=true)', () => {
+    afterEach(() => applyEnvOverrides({ SIZE_ENFORCE_GATE: false }));
+
+    it('hard-stops when an L cannot be split further', async () => {
+      applyEnvOverrides({ SIZE_ENFORCE_GATE: true });
+      const tasks = [makeTask({ id: 'TASK-001', splitDepth: 1 })];
+      await expect(
+        sizePlan(tasks, { sizeFn: async () => new Map([['TASK-001', 'L']]) }),
+      ).rejects.toBeInstanceOf(SizeGateError);
+    });
+
+    it('includes recommendations in the gate error for unsplittable L tasks', async () => {
+      applyEnvOverrides({ SIZE_ENFORCE_GATE: true });
+      const tasks = [makeTask({ id: 'TASK-001', splitDepth: 1 })];
+      try {
+        await sizePlan(tasks, { sizeFn: async () => new Map([['TASK-001', 'L']]) });
+        throw new Error('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(SizeGateError);
+        expect((err as SizeGateError).recommendations).toHaveLength(1);
+      }
+    });
   });
 });
 

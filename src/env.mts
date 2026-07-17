@@ -40,11 +40,13 @@ const envSchema = z.object({
   // regardless of the model's own guess. Kept conservative so the floor defers
   // to the model except on unambiguous over-sizing.
   SIZE_MAX_CRITERIA: z.coerce.number().int().min(1).max(20).default(4),
-  // When false, an unsplittable `L` warns instead of hard-stopping the run.
+  // Strict sizing gate. Off by default: a task that is still `L` after the
+  // sizing passes is allowed to run as-is. Set to true to hard-stop the run
+  // instead when an oversized task survives.
   SIZE_ENFORCE_GATE: z
     .string()
-    .default('true')
-    .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
+    .default('false')
+    .transform((v) => v.toLowerCase() === 'true' || v === '1'),
   // Per-persona model overrides for the L-task debate forum. Unset => the
   // resolver falls back to the tiered defaults (SA/SME => PLANNER, Scrum/Dev
   // => CODER). Kept optional so zero config is required.

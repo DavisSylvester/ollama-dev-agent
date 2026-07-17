@@ -94,6 +94,7 @@ export async function sizePlanNode(
     distribution: result.distribution,
     splits: result.splits,
     recommendations: result.recommendations,
+    oversized: result.oversized,
     taskCount: result.tasks.length,
     tasks: result.tasks,
   });
@@ -229,7 +230,7 @@ async function runTaskNode(
     try {
       const subTasks = await splitTask(failed, failureContext);
       if (subTasks.length > 0) {
-        const sized = await sizePlan(subTasks).catch(() => ({ tasks: subTasks, distribution: { S: 0, M: 0, L: 0 }, splits: [], recommendations: [] }));
+        const sized = await sizePlan(subTasks).catch(() => ({ tasks: subTasks, distribution: { S: 0, M: 0, L: 0 }, splits: [], recommendations: [], oversized: [] }));
         mergedTasks = applySplit(mergedTasks, failed.id, sized.tasks);
         emitAgentEvent('task_split', {
           taskId: failed.id,
