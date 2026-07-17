@@ -254,6 +254,7 @@ export class SizeGateError extends Error {
 export interface SizePlanDeps {
   readonly sizeFn?: (tasks: readonly Task[]) => Promise<Map<string, TaskSize>>;
   readonly debateFn?: (task: Task) => Promise<DebateSplitResult>;
+  readonly onEvent?: (type: string, payload: Record<string, unknown>) => void;
 }
 
 // Cap on how many split passes we run so a pathological model can't loop forever.
@@ -278,7 +279,10 @@ export async function sizePlan(
   deps?: SizePlanDeps,
 ): Promise<SizedPlanResult> {
   const sizeFn = deps?.sizeFn ?? ((t: readonly Task[]) => getModelSizes(t));
-  const debate = deps?.debateFn ?? ((t: Task) => debateSplit(t));
+  const emit = deps?.onEvent;
+  const debate = deps?.debateFn ?? ((t: Task) => debateSplit(t, deps?.onEvent ? { onEvent: deps.onEvent } : undefined));
+
+  emit?.('sizing_started', { taskCount: tasks.length });
 
   // Size freshly-split children: reuse an existing child size when present,
   // otherwise run the model + floor on the unsized ones.
@@ -291,6 +295,7 @@ export async function sizePlan(
 
   const modelSizes = await sizeFn(tasks);
   let current: Task[] = tasks.map((t) => sizeOne(t, modelSizes));
+  for (const t of current) emit?.('task_sized', { taskId: t.id, size: t.size });
   const splits: Array<{ parentId: string; childIds: string[] }> = [];
   const recMap = new Map<string, SizeRecommendation>();
 
@@ -313,6 +318,7 @@ export async function sizePlan(
       if (!recMap.has(parentTask.id)) recMap.set(parentTask.id, recommendation);
       if (children.length === 0) continue;
       const sizedChildren = await sizeChildren(children);
+      for (const c of sizedChildren) emit?.('task_sized', { taskId: c.id, size: c.size });
       current = applySplit(current, parentTask.id, sizedChildren);
       splits.push({ parentId: parentTask.id, childIds: sizedChildren.map((c) => c.id) });
     }
