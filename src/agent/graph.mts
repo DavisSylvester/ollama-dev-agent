@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { DateTime } from 'luxon';
 import { AgentStateAnnotation } from './state.mts';
 import { emitAgentEvent } from './events.mts';
-import { generatePRD } from '../prd/index.mts';
+import { generatePRD, generatePRDFromDocs } from '../prd/index.mts';
 import { splitTask, applySplit, canSplit } from '../prd/splitter.mts';
 import { sizePlan, SizeGateError } from '../prd/sizer.mts';
 import { buildSizingReport } from '../prd/sizing-report.mts';
@@ -33,13 +33,20 @@ export async function draftPlanNode(
 
   emitAgentEvent('phase_changed', { phase: 'generating_prd' });
 
-  const prd = await generatePRD(
-    state.userPrompt,
-    state.workingDirectory,
-    (toolName, args) => {
-      emitAgentEvent('tool_called', { toolName, args, phase: 'generating_prd' });
-    },
-  );
+  const prd = state.docsDir
+    ? await generatePRDFromDocs(
+        state.docsDir,
+        state.userPrompt,
+        state.workingDirectory,
+        (type, payload) => emitAgentEvent(type, payload),
+      )
+    : await generatePRD(
+        state.userPrompt,
+        state.workingDirectory,
+        (toolName, args) => {
+          emitAgentEvent('tool_called', { toolName, args, phase: 'generating_prd' });
+        },
+      );
 
   emitAgentEvent('prd_generated', {
     prd,

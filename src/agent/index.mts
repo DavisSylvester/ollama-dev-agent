@@ -24,12 +24,14 @@ export class DevAgent {
     const board = startProgressBoard();
 
     const prdFile = this.config.prdFile ?? null;
+    const docsDir = this.config.docsDir ?? null;
 
     const initialState: Record<string, unknown> = {
       userPrompt: prompt,
       workingDirectory: this.config.workingDirectory,
       maxIterations: this.config.maxIterations ?? env.MAX_ITERATIONS,
       prdFile,
+      docsDir,
     };
 
     // Resume: unless --fresh, look for a prior incomplete run for this work and

@@ -22,6 +22,7 @@ program
   .option('-i, --max-iter <number>', 'Maximum Ralph loop iterations per task', String(env.MAX_ITERATIONS))
   .option('--no-prd-review', 'Skip PRD review and execute immediately')
   .option('--prd-file <path>', 'Use an existing PRD file instead of generating one')
+  .option('--docs-dir <path>', 'Generate the PRD from a directory of docs (ingest + summarize)')
   // Model overrides (take precedence over .env for this run)
   .option('--planner-model <model>', 'Override the planner model')
   .option('--coder-model <model>', 'Override the worker/coder model')
@@ -43,6 +44,7 @@ const opts = program.opts<{
   maxIter: string;
   prdReview: boolean;
   prdFile?: string;
+  docsDir?: string;
   plannerModel?: string;
   coderModel?: string;
   editorModel?: string;
@@ -75,6 +77,7 @@ const config: AgentConfig = {
   workingDirectory,
   maxIterations,
   ...(opts.prdFile ? { prdFile: opts.prdFile } : {}),
+  ...(opts.docsDir ? { docsDir: opts.docsDir } : {}),
   ...(opts.fresh ? { fresh: true } : {}),
 };
 
