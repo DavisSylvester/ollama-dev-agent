@@ -6,8 +6,10 @@ import { createPlannerTools } from '../tools/index.mts';
 import { runReactAgent, REACT_TIMEOUT_SENTINEL } from '../models/react-agent.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
-import { buildPRDGenerationPrompt } from './prompts.mts';
+import { buildPRDGenerationPrompt, buildDocsPRDSynthesisPrompt } from './prompts.mts';
 import { extractFeatureName, extractFeatureSlug, parseTasks } from './parser.mts';
+import { collectDocFiles } from './doc-ingest.mts';
+import { summarizeDocs, reduceSummaries, type DocSummary, type SummarizeDeps } from './doc-summarizer.mts';
 
 // Injected agent runner — lets tests drive PRD generation without a live model.
 export interface PRDGeneratorDeps {
@@ -94,6 +96,66 @@ export async function buildPRDFromMarkdown(rawMarkdown: string, workingDirectory
     outOfScope,
     rawMarkdown,
   };
+}
+
+export interface PRDFromDocsDeps {
+  collectFn?: (docsDir: string) => Promise<string[]>;
+  summarizeFn?: (docsDir: string, files: readonly string[], deps?: SummarizeDeps) => Promise<DocSummary[]>;
+  reduceFn?: (summaries: DocSummary[], deps?: SummarizeDeps) => Promise<DocSummary[]>;
+  runAgentFn?: typeof runReactAgent;
+}
+
+// Ingest a docs directory -> per-file summaries -> a PRD grounded in them plus
+// an optional directive. onEvent surfaces progress (docs_collected/doc_summarized).
+export async function generatePRDFromDocs(
+  docsDir: string,
+  directive: string,
+  workingDirectory: string,
+  onEvent?: (type: string, payload: Record<string, unknown>) => void,
+  deps?: PRDFromDocsDeps,
+): Promise<PRD> {
+  const collect = deps?.collectFn ?? collectDocFiles;
+  const summarize = deps?.summarizeFn ?? summarizeDocs;
+  const reduce = deps?.reduceFn ?? reduceSummaries;
+  const runAgent = deps?.runAgentFn ?? runReactAgent;
+
+  const files = await collect(docsDir);
+  if (files.length === 0) {
+    throw new Error(`No documentation files found under ${docsDir}`);
+  }
+  onEvent?.('docs_collected', { count: files.length });
+
+  const cacheDir = join(workingDirectory, '.ai', 'planning', 'doc-summaries');
+  const summaries = await summarize(docsDir, files, {
+    cacheDir,
+    onProgress: (done, total, relPath) => onEvent?.('doc_summarized', { relPath, done, total }),
+  });
+  const grounded = await reduce(summaries, {});
+
+  const research = env.RESEARCH_PLANNING;
+  const model = createChatModel(env.PLANNER_MODEL);
+  const tools = research ? createPlannerTools(workingDirectory, env.BRAVE_API_KEY) : [];
+  const systemPrompt = buildDocsPRDSynthesisPrompt(directive, grounded, research);
+  const userPrompt =
+    directive.trim().length > 0 ? directive : 'Generate the PRD grounded in the documentation summaries above.';
+
+  const rawMarkdown = await runAgent(
+    model,
+    tools,
+    systemPrompt,
+    userPrompt,
+    env.PLANNER_MAX_STEPS,
+    (toolName, args) => onEvent?.('tool_called', { toolName, args, phase: 'generating_prd' }),
+  );
+
+  if (rawMarkdown.startsWith(REACT_TIMEOUT_SENTINEL)) {
+    logger.error({ plannerMaxSteps: env.PLANNER_MAX_STEPS }, 'prd.docs_generation_timeout');
+    throw new Error(
+      `PRD generation from docs failed: the planner used all ${env.PLANNER_MAX_STEPS} steps without producing a PRD.`,
+    );
+  }
+
+  return buildPRDFromMarkdown(rawMarkdown, workingDirectory);
 }
 
 export async function loadPRDFromFile(filePath: string): Promise<PRD> {
