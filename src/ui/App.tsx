@@ -4,6 +4,8 @@ import { Header } from './components/Header.tsx';
 import { TaskList } from './components/TaskList.tsx';
 import { StatusBar } from './components/StatusBar.tsx';
 import { PRDPreview } from './components/PRDPreview.tsx';
+import { ActivityFeed } from './components/ActivityFeed.tsx';
+import { formatFeedLine } from './lib/format-feed-line.mts';
 import { agentEvents, uiEvents } from '../agent/events.mts';
 import type { Task, AgentPhase, PRD } from '../types/index.mts';
 
@@ -27,6 +29,7 @@ interface UIState {
   prd: PRD | null;
   prdMarkdown: string;
   error: string | null;
+  feed: string[];
 }
 
 const INITIAL_STATE: UIState = {
@@ -40,6 +43,7 @@ const INITIAL_STATE: UIState = {
   prd: null,
   prdMarkdown: '',
   error: null,
+  feed: [],
 };
 
 export function App({ version, onAgentStart, autoApprove = false }: AppProps): React.ReactElement {
@@ -130,6 +134,13 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
       setTimeout(() => exit(), 1000);
     };
 
+    const handleFeedEvent = (event: unknown): void => {
+      const e = event as { type: string; payload: Record<string, unknown> };
+      const line = formatFeedLine(e.type, e.payload);
+      if (line === null) return;
+      setState((prev) => ({ ...prev, feed: [...prev.feed, line].slice(-8) }));
+    };
+
     agentEvents.on('phase_changed', handlePhaseChanged);
     agentEvents.on('prd_generated', handlePRDGenerated);
     agentEvents.on('task_started', handleTaskStarted);
@@ -141,6 +152,11 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
     agentEvents.on('tool_called', handleToolCalled);
     agentEvents.on('complete', handleComplete);
     agentEvents.on('error', handleError);
+    agentEvents.on('sizing_started', handleFeedEvent);
+    agentEvents.on('task_sized', handleFeedEvent);
+    agentEvents.on('debate_started', handleFeedEvent);
+    agentEvents.on('persona_stance', handleFeedEvent);
+    agentEvents.on('debate_decided', handleFeedEvent);
 
     onAgentStart();
 
@@ -156,6 +172,11 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
       agentEvents.off('tool_called', handleToolCalled);
       agentEvents.off('complete', handleComplete);
       agentEvents.off('error', handleError);
+      agentEvents.off('sizing_started', handleFeedEvent);
+      agentEvents.off('task_sized', handleFeedEvent);
+      agentEvents.off('debate_started', handleFeedEvent);
+      agentEvents.off('persona_stance', handleFeedEvent);
+      agentEvents.off('debate_decided', handleFeedEvent);
     };
   }, [exit, onAgentStart]);
 
@@ -225,6 +246,7 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
         currentTool={state.currentTool || undefined}
         iteration={state.currentIteration}
       />
+      <ActivityFeed lines={state.feed} />
     </Box>
   );
 }
