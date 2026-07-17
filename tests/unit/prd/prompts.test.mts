@@ -7,6 +7,7 @@ import {
   buildPersonaCritiquePrompt,
   buildDebateSynthesisPrompt,
   buildDocSummaryPrompt,
+  buildDocsPRDSynthesisPrompt,
 } from '../../../src/prd/prompts.mts';
 import type { Task } from '../../../src/types/index.mts';
 
@@ -362,5 +363,20 @@ describe('buildDocSummaryPrompt', () => {
     expect(p).toContain('memory/05-data-models.md');
     expect(p).toContain('User has id and email.');
     expect(p.toLowerCase()).toContain('summar');
+  });
+});
+
+describe('buildDocsPRDSynthesisPrompt', () => {
+  it('includes the directive, the PRD format rules, and the doc summaries', () => {
+    const p = buildDocsPRDSynthesisPrompt(
+      'build only the API',
+      [{ relPath: 'memory/06-api.md', summary: 'CRUD for photos' }],
+      false,
+    );
+    expect(p).toContain('build only the API');       // directive
+    expect(p).toContain('TASK-001');                  // reuses PRD format rules
+    expect(p).toContain('Source Documentation');      // grounding section
+    expect(p).toContain('memory/06-api.md');
+    expect(p).toContain('CRUD for photos');
   });
 });
