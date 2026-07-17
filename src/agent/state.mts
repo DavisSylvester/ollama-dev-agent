@@ -18,6 +18,7 @@ export const AgentStateAnnotation = Annotation.Root({
   completedTaskIds: Annotation<string[]>({ default: () => [], reducer: (a, b) => [...new Set([...a, ...b])] }),
   resumed: Annotation<boolean>({ default: () => false, reducer: (_, b) => b }),
   prdFile: Annotation<string | null>({ default: () => null, reducer: (_, b) => b }),
+  docsDir: Annotation<string | null>({ default: () => null, reducer: (_, b) => b }),
 });
 
 export type AgentStateType = typeof AgentStateAnnotation.State;

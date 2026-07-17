@@ -20,7 +20,7 @@ function resumedState(): AgentStateType {
     tasks: [task('TASK-001', 'complete'), task('TASK-002', 'pending')],
     currentIteration: 0, maxIterations: 5, workerOutput: '', reviewerFeedback: '',
     lastDecision: null, phase: 'initializing', error: null, completedTaskIds: [],
-    resumed: true, prdFile: null,
+    resumed: true, prdFile: null, docsDir: null,
   };
 }
 

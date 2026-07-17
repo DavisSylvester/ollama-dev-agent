@@ -1,5 +1,6 @@
 import type { Task } from '../types/index.mts';
 import type { DebatePersona, ProposedStory, PersonaStance } from './debate.mts';
+import type { DocSummary } from './doc-summarizer.mts';
 import { env } from '../env.mts';
 
 export function buildPRDGenerationPrompt(userPrompt: string, research: boolean = true): string {
@@ -254,6 +255,44 @@ Output ONLY a JSON array, nothing else:
 [
   { "name": "<short story name>", "description": "<one focused concern>", "acceptanceCriteria": "<specific, verifiable criteria>" }
 ]`;
+}
+
+export const DEFAULT_DOCS_DIRECTIVE =
+  'Generate a PRD that builds the system described in the documentation below.';
+
+export function buildDocsPRDSynthesisPrompt(
+  directive: string,
+  summaries: readonly DocSummary[],
+  research: boolean,
+): string {
+  const base = buildPRDGenerationPrompt(directive.trim().length > 0 ? directive : DEFAULT_DOCS_DIRECTIVE, research);
+  const docsBlock = summaries.map((s) => `### ${s.relPath}\n${s.summary}`).join('\n\n');
+
+  return `${base}
+
+## Source Documentation (summaries)
+
+Ground every task in the documentation summarized below. Do NOT invent scope beyond what these documents describe; where the directive narrows scope, follow the directive.
+
+${docsBlock}`;
+}
+
+export function buildDocSummaryPrompt(relPath: string, content: string): string {
+  return `You are condensing one project document so a planner can generate a PRD from many documents without exceeding its context.
+
+## Document: ${relPath}
+
+${content}
+
+## Your job
+Summarize THIS document concisely but completely for PRD generation. Capture, as compact bullets or prose:
+- purpose / what this document is about
+- concrete features and capabilities
+- entities / data models and key fields
+- API surface (endpoints, operations) if any
+- constraints, rules, and explicit technical decisions
+
+Do NOT use PRD or task formatting. Do NOT invent details not present in the document. Output only the summary.`;
 }
 
 export function buildWorkerPrompt(
