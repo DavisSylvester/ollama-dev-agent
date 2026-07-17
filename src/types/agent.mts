@@ -38,6 +38,7 @@ export interface AgentConfig {
   readonly maxReactSteps?: number;
   readonly prdFile?: string;
   readonly fresh?: boolean;
+  readonly docsDir?: string;
 }
 
 export type AgentEventType =
@@ -45,6 +46,8 @@ export type AgentEventType =
   | 'prd_generated'
   | 'plan_sized'
   | 'run_resumed'
+  | 'docs_collected'
+  | 'doc_summarized'
   | 'prd_approved'
   | 'task_started'
   | 'task_complete'
