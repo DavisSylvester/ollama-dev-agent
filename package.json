@@ -20,7 +20,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@langchain/core": "^0.3.27",
+    "@langchain/core": "^1.2.0",
     "@langchain/langgraph": "^0.2.36",
     "@langchain/ollama": "^0.1.5",
     "axios": "^1.7.9",
