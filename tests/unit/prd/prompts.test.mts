@@ -438,3 +438,26 @@ describe('buildReviewerPrompt — coding-standard checks', () => {
     expect(prompt).not.toContain('Playwright MCP server tools');
   });
 });
+
+describe('buildReviewerPrompt — false-REVISE guards', () => {
+  it('says i- prefixed interface files are kebab-case', () => {
+    const prompt = buildReviewerPrompt(PENDING_TASK, 'done', 'Kanban Board');
+    expect(prompt).toContain('An `i-` prefix on an interface file');
+  });
+
+  it('explains the truncation marker', () => {
+    const prompt = buildReviewerPrompt(PENDING_TASK, 'done', 'Kanban Board', [{ path: 'a.mts', content: 'x' }]);
+    expect(prompt).toContain('was cut off by oda to fit your context');
+    expect(prompt).not.toContain('No implementation files could be embedded');
+  });
+
+  it('tells the reviewer not to REVISE only because no files were embedded', () => {
+    const prompt = buildReviewerPrompt(PENDING_TASK, 'done', 'Kanban Board', []);
+    expect(prompt).toContain('No implementation files could be embedded');
+  });
+
+  it('no longer asks the reviewer to judge dependency versions', () => {
+    const prompt = buildReviewerPrompt(PENDING_TASK, 'done', 'Kanban Board');
+    expect(prompt).not.toContain('`mongodb` pinned below v7');
+  });
+});

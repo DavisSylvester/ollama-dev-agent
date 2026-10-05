@@ -846,3 +846,98 @@ describe('withCarriedReview', () => {
     expect(withCarriedReview('lint', '')).toBe('lint');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Timeout salvage — a worker that ran out of steps after writing its files
+// ---------------------------------------------------------------------------
+
+describe('RalphLoop.runTask — timeout salvage', () => {
+  const TIMED_OUT = `${REACT_TIMEOUT_SENTINEL} (50) without a final answer. Tools attempted: write_file.`;
+
+  it('sends a timed-out attempt to lint and review when its test command passes', async () => {
+    const task = makeTask({ testCommand: 'bun test tests/x.test.mts' });
+    const verifiedCommands: string[] = [];
+    let reviewedFiles: readonly string[] = [];
+    let reviewedOutput = '';
+
+    const deps: RalphRunnerDeps = {
+      lintFn: makeCleanLint(),
+      workerFn: async (params) => {
+        params.onToolCall?.('write_file', { path: 'src/x.mts', content: 'x' });
+        return TIMED_OUT;
+      },
+      verifyFn: async (_wd, command) => {
+        verifiedCommands.push(command);
+        return { passed: true, output: '3 pass\n0 fail' };
+      },
+      reviewerFn: async (params) => {
+        reviewedFiles = params.changedFiles ?? [];
+        reviewedOutput = params.workerOutput;
+        return makeShipDecision();
+      },
+    };
+
+    const result = await loop.runTask(task, NO_TOOLS, undefined, deps);
+
+    expect(result).toBe('complete');
+    expect(verifiedCommands).toEqual(['bun test tests/x.test.mts']);
+    expect(reviewedFiles).toEqual(['src/x.mts']);
+    expect(reviewedOutput).toContain('test command passes');
+    expect(reviewedOutput).toContain('`src/x.mts`');
+  });
+
+  it('skips the reviewer and feeds the test failure forward when the tests fail', async () => {
+    const task = makeTask();
+    let reviewerCalls = 0;
+    const feedbackSeen: string[] = [];
+
+    const deps: RalphRunnerDeps = {
+      lintFn: makeCleanLint(),
+      workerFn: async (params) => {
+        feedbackSeen.push(params.reviewerFeedback);
+        params.onToolCall?.('write_file', { path: 'src/y.mts', content: 'y' });
+        return TIMED_OUT;
+      },
+      verifyFn: async () => ({ passed: false, output: 'expected 2, received 3\n1 fail' }),
+      reviewerFn: async () => {
+        reviewerCalls++;
+        return makeShipDecision();
+      },
+    };
+
+    const result = await loop.runTask(task, NO_TOOLS, undefined, deps);
+
+    expect(result).toBe('failed');
+    expect(reviewerCalls).toBe(0);
+    // Iteration 2 got the previous attempt's files and test failure.
+    expect(feedbackSeen[1]).toContain('`src/y.mts`');
+    expect(feedbackSeen[1]).toContain('expected 2, received 3');
+  });
+
+  it('does not run the test command when the timed-out worker wrote nothing', async () => {
+    const task = makeTask();
+    let verifyCalls = 0;
+
+    const deps: RalphRunnerDeps = {
+      lintFn: makeCleanLint(),
+      workerFn: async () => TIMED_OUT,
+      verifyFn: async () => {
+        verifyCalls++;
+        return { passed: true, output: '' };
+      },
+      reviewerFn: async () => makeShipDecision(),
+    };
+
+    expect(await loop.runTask(task, NO_TOOLS, undefined, deps)).toBe('failed');
+    expect(verifyCalls).toBe(0);
+  });
+});
+
+describe('buildTimeoutFeedback', () => {
+  it('never tells the worker to call list_directory', async () => {
+    const { buildTimeoutFeedback } = await import('../../../src/ralph/loop.mts');
+    const text = buildTimeoutFeedback(1000, 50);
+    expect(text).toContain('Do not call `list_directory`');
+    expect(text).not.toContain('at most once');
+  });
+});

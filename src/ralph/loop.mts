@@ -4,6 +4,7 @@ import { ContextManager } from './context-manager.mts';
 import { runWorker } from './worker.mts';
 import { runReviewer } from './reviewer.mts';
 import { runLint, type LintResult } from '../tools/run-linter.mts';
+import { runTestCommand, type VerifyResult } from './verify.mts';
 import { REACT_TIMEOUT_SENTINEL } from '../models/react-agent.mts';
 import { appendEntry, categorizeTask, generalizePrompt, generalizeText } from '../knowledge-base/index.mts';
 import { isQuotaError, isTransientOllamaError, QuotaExceededError } from '../models/ollama-client.mts';
@@ -28,6 +29,7 @@ export interface RalphRunnerDeps {
   readonly workerFn?: typeof runWorker;
   readonly reviewerFn?: typeof runReviewer;
   readonly lintFn?: typeof runLint;
+  readonly verifyFn?: (workingDirectory: string, command: string) => Promise<VerifyResult>;
 }
 
 export class RalphLoop {
@@ -39,8 +41,12 @@ export class RalphLoop {
     private readonly featureSlug: string,
     private readonly featureName: string,
     private readonly maxIterations: number,
+    // Where activity logs and completion markers live. Differs from
+    // workingDirectory when the task runs in an isolated worktree, so the
+    // records stay in the real tree after the worktree is removed.
+    contextDirectory: string = workingDirectory,
   ) {
-    this.contextManager = new ContextManager(workingDirectory, featureSlug);
+    this.contextManager = new ContextManager(contextDirectory, featureSlug);
   }
 
   async runTask(
@@ -52,6 +58,7 @@ export class RalphLoop {
     const worker = deps?.workerFn ?? runWorker;
     const reviewer = deps?.reviewerFn ?? runReviewer;
     const lint = deps?.lintFn ?? runLint;
+    const verify = deps?.verifyFn ?? runTestCommand;
 
     // Short-circuit if already complete
     const alreadyComplete = await this.contextManager.isTaskComplete(task.id).catch(() => false);
@@ -194,10 +201,28 @@ export class RalphLoop {
         issuesLogged++;
       }
 
+      const changedFiles = extractChangedFiles(toolCallLog);
+
       // --- Sentinel detection ---
-      // If the worker exhausted its step budget, skip the reviewer and force
-      // another iteration with targeted feedback. The worker may have left files
-      // in a partial state, so it is unsafe to let the reviewer SHIP from here.
+      // If the worker exhausted its step budget, it may still have written
+      // everything and only failed to stop and summarize. Run the task's test
+      // command: if it passes, salvage the attempt and send it on to lint and
+      // review (which still guard against shipping partial work). Otherwise
+      // skip the reviewer and force another iteration with targeted feedback.
+      let salvage: VerifyResult | null = null;
+      if (workerOutput.startsWith(REACT_TIMEOUT_SENTINEL) && changedFiles.length > 0) {
+        salvage = await verify(this.workingDirectory, task.testCommand).catch(
+          (err: unknown): VerifyResult => ({ passed: false, output: String(err) }),
+        );
+        if (salvage.passed) {
+          logger.info(
+            { taskId: task.id, iteration, changedFiles: changedFiles.length },
+            'ralph.worker_timeout_salvaged: tests pass; continuing to lint and review',
+          );
+          workerOutput = buildSalvagedReport(workerOutput, changedFiles, task.testCommand, salvage.output);
+        }
+      }
+
       if (workerOutput.startsWith(REACT_TIMEOUT_SENTINEL)) {
         note(iteration, 'timeout', workerOutput.includes('wall-clock') ? 'ran out of time' : 'ran out of steps');
         logger.warn(
@@ -206,7 +231,7 @@ export class RalphLoop {
         );
 
         const timeoutFeedback = withCarriedReview(
-          buildTimeoutFeedback(workerDurationMs, toolCallLog.length),
+          buildTimeoutFeedback(workerDurationMs, toolCallLog.length, changedFiles, task.testCommand, salvage),
           reviewerFeedback,
         );
         const noDataReason =
@@ -254,7 +279,6 @@ export class RalphLoop {
       // The Reviewer is NEVER called if lint has unfixable errors.
       // Scope the lint to the files THIS worker wrote/edited this iteration, so
       // parallel tasks aren't held responsible for each other's lint state.
-      const changedFiles = extractChangedFiles(toolCallLog);
       let lintResult: LintResult;
       try {
         await lint(this.workingDirectory, true, changedFiles);               // auto-fix in-place
@@ -320,6 +344,7 @@ export class RalphLoop {
           featureSlug: this.featureSlug,
           workingDirectory: this.workingDirectory,
           workerOutput,
+          changedFiles,
         });
       } catch (err) {
         if (isQuotaError(err)) throw toQuotaError(err);
@@ -803,21 +828,77 @@ function buildActivityEntry(
   return lines.join('\n') + '\n';
 }
 
-function buildTimeoutFeedback(durationMs: number, toolCallCount: number): string {
-  return [
+export function buildTimeoutFeedback(
+  durationMs: number,
+  toolCallCount: number,
+  changedFiles: readonly string[] = [],
+  testCommand: string = '',
+  testRun: VerifyResult | null = null,
+): string {
+  const lines: string[] = [
     `## ⚠ Worker Timed Out`,
     ``,
     `The previous attempt exhausted its step budget after ${formatDuration(durationMs)} and ${toolCallCount} tool calls.`,
     `The reviewer was **skipped** — the implementation may be incomplete or broken.`,
+  ];
+
+  if (changedFiles.length > 0) {
+    lines.push(
+      ``,
+      `## Files the previous attempt already wrote`,
+      ``,
+      `These are on disk now. Do not rewrite them from scratch — read only the ones you need to fix and continue from there.`,
+      ``,
+      ...changedFiles.map((f) => `- \`${f}\``),
+    );
+  }
+
+  if (testRun) {
+    lines.push(
+      ``,
+      `## Test command result after the timeout`,
+      ``,
+      `\`${testCommand}\` **failed**. Fix these failures first:`,
+      ``,
+      '```',
+      testRun.output.trim().slice(-2000),
+      '```',
+    );
+  }
+
+  lines.push(
     ``,
     `## Instructions for Next Attempt`,
     ``,
-    `- Call \`list_directory\` **at most once** at the very start`,
+    `- Do not call \`list_directory\` — the directory structure is in your prompt`,
     `- Do NOT re-read files you have already seen this iteration`,
-    `- Begin writing implementation files **immediately** after your initial survey`,
+    `- Begin writing implementation files **immediately** after a minimal survey`,
     `- Run the test command **only after** all files are written`,
     `- Do not call the same tool more than 2–3 times total`,
-    `- If the directory is already populated from a previous attempt, skip exploration entirely and go straight to verification`,
+    `- When the test command passes, stop and write your final summary — do not keep exploring`,
+  );
+  return lines.join('\n');
+}
+
+// The report passed to the reviewer for a timed-out attempt whose tests pass.
+// Names every file the worker wrote so the reviewer loads and checks them.
+export function buildSalvagedReport(
+  timeoutOutput: string,
+  changedFiles: readonly string[],
+  testCommand: string,
+  testOutput: string,
+): string {
+  return [
+    `The worker ran out of steps before writing its summary, but the test command passes.`,
+    `(${timeoutOutput.trim()})`,
+    ``,
+    `Files created or modified:`,
+    ...changedFiles.map((f) => `- \`${f}\``),
+    ``,
+    `Test command \`${testCommand}\` passed. Tail of its output:`,
+    '```',
+    testOutput.trim().slice(-1500),
+    '```',
   ].join('\n');
 }
 
