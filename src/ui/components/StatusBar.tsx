@@ -8,6 +8,19 @@ interface StatusBarProps {
   readonly model?: string | undefined;
   readonly currentTool?: string | undefined;
   readonly iteration?: number | undefined;
+  // What the agent is doing now, and for how long — ticks every second.
+  readonly activity?: string | undefined;
+  readonly activitySeconds?: number | undefined;
+}
+
+// After this long without a new event, say so explicitly: the agent is still
+// alive, the model (or a command) is just slow.
+const SLOW_SECONDS = 120;
+
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
 }
 
 const PHASE_LABELS: Record<AgentPhase, string> = {
@@ -47,17 +60,18 @@ export function StatusBar({
   model,
   currentTool,
   iteration,
+  activity,
+  activitySeconds,
 }: StatusBarProps): React.ReactElement {
   const isActive = ACTIVE_PHASES.has(phase);
   const label = PHASE_LABELS[phase];
   const color = phaseColor(phase);
+  const slow = (activitySeconds ?? 0) >= SLOW_SECONDS;
 
   return (
+    <Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1}>
     <Box
       flexDirection="row"
-      borderStyle="single"
-      borderColor="gray"
-      paddingX={1}
       gap={2}
     >
       <Box gap={1}>
@@ -85,6 +99,13 @@ export function StatusBar({
           <Text color="yellow">{iteration}</Text>
         </Box>
       )}
+    </Box>
+    {isActive && activity && (
+      <Text color={slow ? 'yellow' : 'gray'} wrap="truncate-end">
+        {activity} · {formatElapsed(activitySeconds ?? 0)}
+        {slow ? '  (still waiting — the model or command is slow, not stuck)' : ''}
+      </Text>
+    )}
     </Box>
   );
 }

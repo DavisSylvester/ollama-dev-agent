@@ -6,6 +6,8 @@ import { StatusBar } from './components/StatusBar.tsx';
 import { PRDPreview } from './components/PRDPreview.tsx';
 import { ActivityFeed } from './components/ActivityFeed.tsx';
 import { CommandPanel, type CommandView } from './components/CommandPanel.tsx';
+import { StartupPanel } from './components/StartupPanel.tsx';
+import { buildStartupSummary, type StartupSummary } from './lib/startup-summary.mts';
 import { formatFeedLine } from './lib/format-feed-line.mts';
 import { commandFailed, commandOutputText, describeToolCall, tailLines } from './lib/format-command.mts';
 import { agentEvents, uiEvents } from '../agent/events.mts';
@@ -23,6 +25,7 @@ interface AppProps {
 interface UIState {
   phase: AgentPhase;
   featureName: string;
+  featureSlug: string;
   tasks: Task[];
   currentTaskIndex: number;
   currentIteration: number;
@@ -32,9 +35,62 @@ interface UIState {
   prdMarkdown: string;
   error: string | null;
   feed: string[];
+  // Final result reported by the scheduler's `complete` event.
+  summary: RunSummary | null;
   // Latest command per running task, most recent first.
   commands: CommandView[];
+  // What the agent is doing right now and since when, so a long wait (a slow
+  // model call, a quota pause) shows as a ticking timer, not a frozen screen.
+  activity: { label: string; since: number };
+  // Status of every task when execution began, printed once.
+  startup: StartupSummary | null;
 }
+
+interface RunSummary {
+  completed: number;
+  failed: number;
+  blocked: number;
+  total: number;
+  failedTasks: Array<{ id: string; name: string; reason: string }>;
+  blockers: string[];
+  userPrompt: string;
+}
+
+// Events that add a line to the Activity feed.
+const FEED_EVENTS: readonly string[] = [
+  'sizing_started', 'task_sized', 'debate_started', 'persona_stance', 'debate_decided',
+  'task_started', 'iteration_finished', 'model_retry', 'quota_paused', 'dependencies_checked',
+  'task_complete', 'task_failed', 'task_split', 'reviewer_decision',
+];
+
+// What the status bar says the agent is doing after each event.
+function activityLabel(type: string, payload: Record<string, unknown>): string | null {
+  switch (type) {
+    case 'iteration_started':
+      return `${String(payload['taskId'])}: waiting for the model (attempt ${String(payload['iteration'])})`;
+    case 'tool_called':
+      return `${String(payload['taskId'])}: running ${describeToolCall(String(payload['toolName']), (payload['args'] as Record<string, unknown> | undefined) ?? {})}`;
+    case 'tool_result':
+      return `${String(payload['taskId'])}: waiting for the model`;
+    case 'lint_complete':
+      return `${String(payload['taskId'])}: reviewing`;
+    case 'model_retry':
+      return `model call failed — retry ${String(payload['attempt'])}/${String(payload['maxRetries'])}`;
+    case 'quota_paused':
+      return `paused: model quota reached (${String(payload['waitMinutes'])} min)`;
+    case 'task_started':
+      return `${String(payload['taskId'])}: starting`;
+    case 'dependencies_checked':
+      return 'checking dependencies';
+    default:
+      return null;
+  }
+}
+
+const ACTIVITY_EVENTS: readonly string[] = [
+  'iteration_started', 'tool_called', 'tool_result', 'lint_complete', 'model_retry',
+  'quota_paused', 'task_started', 'dependencies_checked',
+];
 
 // Lines of command output shown per task, and how many tasks to show.
 const OUTPUT_LINES = 3;
@@ -47,6 +103,7 @@ function upsertCommand(commands: CommandView[], next: CommandView): CommandView[
 const INITIAL_STATE: UIState = {
   phase: 'initializing',
   featureName: '',
+  featureSlug: '',
   tasks: [],
   currentTaskIndex: 0,
   currentIteration: 0,
@@ -56,17 +113,35 @@ const INITIAL_STATE: UIState = {
   prdMarkdown: '',
   error: null,
   feed: [],
+  summary: null,
   commands: [],
+  activity: { label: 'starting', since: Date.now() },
+  startup: null,
 };
 
 export function App({ version, onAgentStart, autoApprove = false }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const [state, setState] = useState<UIState>(INITIAL_STATE);
+  // Re-render once a second so the activity timer ticks even when no event arrives.
+  const [now, setNow] = useState<number>(Date.now());
+
+  useEffect(() => {
+    if (state.phase === 'complete' || state.phase === 'failed') return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return (): void => clearInterval(timer);
+  }, [state.phase]);
 
   useEffect(() => {
     const handlePhaseChanged = (event: unknown): void => {
       const e = event as { payload: { phase: AgentPhase } };
-      setState((prev) => ({ ...prev, phase: e.payload.phase }));
+      setState((prev) => ({
+        ...prev,
+        phase: e.payload.phase,
+        // Fresh run: snapshot the plan the first time execution starts.
+        startup: prev.startup ?? (e.payload.phase === 'executing_tasks' && prev.tasks.length > 0
+          ? buildStartupSummary(prev.tasks, [], false)
+          : null),
+      }));
     };
 
     const handlePRDGenerated = (event: unknown): void => {
@@ -74,6 +149,7 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
         payload: {
           prd: PRD;
           featureName: string;
+          featureSlug?: string;
           prdMarkdown: string;
         };
       };
@@ -82,6 +158,7 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
         prd: e.payload.prd,
         prdMarkdown: e.payload.prdMarkdown,
         featureName: e.payload.featureName,
+        featureSlug: e.payload.featureSlug ?? prev.featureSlug,
         tasks: e.payload.prd.tasks,
         phase: 'awaiting_approval',
       }));
@@ -109,8 +186,33 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
     };
 
     const handleTaskFailed = (event: unknown): void => {
-      const e = event as { payload: { taskId: string } };
-      setState((prev) => ({ ...prev, commands: prev.commands.filter((c) => c.taskId !== e.payload.taskId) }));
+      const e = event as { payload: { taskId: string; reason?: string } };
+      setState((prev) => ({
+        ...prev,
+        tasks: prev.tasks.map((t) =>
+          t.id === e.payload.taskId ? { ...t, status: 'failed' as const, ...(e.payload.reason ? { failureReason: e.payload.reason } : {}) } : t,
+        ),
+        commands: prev.commands.filter((c) => c.taskId !== e.payload.taskId),
+      }));
+    };
+
+    // A resumed run skips planning, so prd_generated never fires: take the plan
+    // and its saved statuses from run_resumed instead.
+    const handleRunResumed = (event: unknown): void => {
+      const e = event as { payload: { featureName: string; featureSlug: string; tasks: Task[]; previousTasks?: Task[] } };
+      setState((prev) => ({
+        ...prev,
+        featureName: e.payload.featureName,
+        featureSlug: e.payload.featureSlug,
+        tasks: e.payload.tasks,
+        phase: 'executing_tasks',
+        startup: buildStartupSummary(e.payload.tasks, e.payload.previousTasks ?? [], true),
+      }));
+    };
+
+    const handleTasksUpdated = (event: unknown): void => {
+      const e = event as { payload: { tasks: Task[] } };
+      setState((prev) => ({ ...prev, tasks: e.payload.tasks }));
     };
 
     const handleIterationStarted = (event: unknown): void => {
@@ -178,9 +280,48 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
       }));
     };
 
-    const handleComplete = (): void => {
-      setState((prev) => ({ ...prev, phase: 'complete' }));
+    const handleComplete = (event: unknown): void => {
+      const e = event as {
+        payload: {
+          featureName?: string;
+          featureSlug?: string;
+          completedCount?: number;
+          failedCount?: number;
+          blockedCount?: number;
+          totalCount?: number;
+          failed?: Array<{ id: string; name: string; reason: string }>;
+          blockers?: string[];
+          userPrompt?: string;
+        };
+      };
+      setState((prev) => {
+        const count = (status: Task['status']): number => prev.tasks.filter((t) => t.status === status).length;
+        return {
+          ...prev,
+          phase: 'complete',
+          featureName: e.payload.featureName ?? prev.featureName,
+          featureSlug: e.payload.featureSlug ?? prev.featureSlug,
+          summary: {
+            completed: e.payload.completedCount ?? count('complete'),
+            failed: e.payload.failedCount ?? count('failed'),
+            blocked: e.payload.blockedCount ?? count('blocked'),
+            total: e.payload.totalCount
+              ?? Math.max(prev.tasks.length, (e.payload.completedCount ?? 0) + (e.payload.failedCount ?? 0) + (e.payload.blockedCount ?? 0)),
+            failedTasks: e.payload.failed
+              ?? prev.tasks.filter((t) => t.status === 'failed').map((t) => ({ id: t.id, name: t.name, reason: t.failureReason ?? '' })),
+            blockers: e.payload.blockers ?? [],
+            userPrompt: e.payload.userPrompt ?? '',
+          },
+        };
+      });
       setTimeout(() => exit(), 500);
+    };
+
+    const handleActivity = (event: unknown): void => {
+      const e = event as { type: string; payload: Record<string, unknown> };
+      const label = activityLabel(e.type, e.payload);
+      if (label === null) return;
+      setState((prev) => ({ ...prev, activity: { label, since: Date.now() } }));
     };
 
     const handleError = (event: unknown): void => {
@@ -207,14 +348,13 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
     agentEvents.on('reviewer_decision', handleReviewerDecision);
     agentEvents.on('tool_called', handleToolCalled);
     agentEvents.on('tool_result', handleToolResult);
+    agentEvents.on('run_resumed', handleRunResumed);
+    agentEvents.on('tasks_updated', handleTasksUpdated);
     agentEvents.on('task_failed', handleTaskFailed);
     agentEvents.on('complete', handleComplete);
     agentEvents.on('error', handleError);
-    agentEvents.on('sizing_started', handleFeedEvent);
-    agentEvents.on('task_sized', handleFeedEvent);
-    agentEvents.on('debate_started', handleFeedEvent);
-    agentEvents.on('persona_stance', handleFeedEvent);
-    agentEvents.on('debate_decided', handleFeedEvent);
+    for (const type of FEED_EVENTS) agentEvents.on(type, handleFeedEvent);
+    for (const type of ACTIVITY_EVENTS) agentEvents.on(type, handleActivity);
 
     onAgentStart();
 
@@ -229,14 +369,13 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
       agentEvents.off('reviewer_decision', handleReviewerDecision);
       agentEvents.off('tool_called', handleToolCalled);
       agentEvents.off('tool_result', handleToolResult);
+      agentEvents.off('run_resumed', handleRunResumed);
+      agentEvents.off('tasks_updated', handleTasksUpdated);
       agentEvents.off('task_failed', handleTaskFailed);
       agentEvents.off('complete', handleComplete);
       agentEvents.off('error', handleError);
-      agentEvents.off('sizing_started', handleFeedEvent);
-      agentEvents.off('task_sized', handleFeedEvent);
-      agentEvents.off('debate_started', handleFeedEvent);
-      agentEvents.off('persona_stance', handleFeedEvent);
-      agentEvents.off('debate_decided', handleFeedEvent);
+      for (const type of FEED_EVENTS) agentEvents.off(type, handleFeedEvent);
+      for (const type of ACTIVITY_EVENTS) agentEvents.off(type, handleActivity);
     };
   }, [exit, onAgentStart]);
 
@@ -273,19 +412,56 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
   }
 
   if (state.phase === 'complete') {
-    const completedCount = state.tasks.filter((t) => t.status === 'complete').length;
-    const failedCount = state.tasks.filter((t) => t.status === 'failed').length;
+    const s = state.summary;
+    const completed = s?.completed ?? 0;
+    const failed = s?.failed ?? 0;
+    const blocked = s?.blocked ?? 0;
+    const total = s?.total ?? state.tasks.length;
+    const allDone = failed === 0 && blocked === 0 && completed === total;
+    const resultsPath = `feature-results/${state.featureSlug || 'unknown'}/RESULTS.md`;
+    const failedTasks = s?.failedTasks ?? [];
+    const rerun = s?.userPrompt ? `oda "${s.userPrompt}"` : 're-run the same oda command';
 
     return (
       <Box flexDirection="column" padding={1} gap={1}>
         <Header version={version} featureName={state.featureName} />
-        <Box flexDirection="column" borderStyle="round" borderColor="green" paddingX={1}>
-          <Text bold color="green">Feature Complete</Text>
-          <Text color="white">
-            <Text bold color="green">{completedCount}</Text> tasks completed,{' '}
-            <Text bold color={failedCount > 0 ? 'red' : 'green'}>{failedCount}</Text> failed
+        <Box flexDirection="column" borderStyle="round" borderColor={allDone ? 'green' : 'yellow'} paddingX={1}>
+          <Text bold color={allDone ? 'green' : 'yellow'}>{allDone ? 'Feature Complete' : 'Run Finished — Not Complete'}</Text>
+          <Text>
+            <Text bold color="green">{completed}</Text> of {total} tasks completed
+            {failed > 0 && <Text> · <Text bold color="red">{failed}</Text> failed</Text>}
+            {blocked > 0 && <Text> · <Text bold color="magenta">{blocked}</Text> blocked (never ran)</Text>}
           </Text>
-          <Text dimColor>Results written to feature-results/{state.featureName}/RESULTS.md</Text>
+
+          {failedTasks.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text bold color="red">Failed</Text>
+              {failedTasks.slice(0, 8).map((t) => (
+                <Box key={t.id} flexDirection="column">
+                  <Text wrap="truncate-end"><Text color="red">✗ {t.id}</Text> {t.name}</Text>
+                  {t.reason ? <Text dimColor wrap="truncate-end">    {t.reason}</Text> : null}
+                </Box>
+              ))}
+              {failedTasks.length > 8 && <Text dimColor>…and {failedTasks.length - 8} more (see results)</Text>}
+            </Box>
+          )}
+
+          {blocked > 0 && (
+            <Box marginTop={1}>
+              <Text color="magenta" wrap="wrap">
+                ⊘ {blocked} task{blocked === 1 ? '' : 's'} never ran because {s?.blockers.length ? s.blockers.join(', ') : 'a task they depend on'} failed.
+              </Text>
+            </Box>
+          )}
+
+          {!allDone && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text bold>Next step</Text>
+              <Text>Re-run to retry the failed tasks and everything they block (completed work is kept):</Text>
+              <Text color="cyan">  {rerun}</Text>
+            </Box>
+          )}
+          <Text dimColor>Results written to {resultsPath}</Text>
         </Box>
       </Box>
     );
@@ -293,6 +469,7 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
 
   return (
     <Box flexDirection="column" padding={1} gap={1}>
+      <StartupPanel featureName={state.featureName} summary={state.startup} />
       <Header version={version} featureName={state.featureName || undefined} />
       {state.tasks.length > 0 && (
         <TaskList
@@ -305,6 +482,8 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
         model={state.currentModel || undefined}
         currentTool={state.currentTool || undefined}
         iteration={state.currentIteration}
+        activity={state.activity.label}
+        activitySeconds={Math.max(0, Math.floor((now - state.activity.since) / 1000))}
       />
       <CommandPanel commands={state.commands} />
       <ActivityFeed lines={state.feed} />

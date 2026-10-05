@@ -2,6 +2,7 @@ import { ChatOllama } from '@langchain/ollama';
 import { Ollama, type Fetch } from 'ollama';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
+import { emitAgentEvent } from '../agent/events.mts';
 
 // Bearer auth header for Ollama Cloud. Returns undefined for local Ollama
 // (no key set) so behavior is unchanged when running locally.
@@ -235,6 +236,14 @@ export async function withOllamaRetry<T>(
         { attempt: attempt + 1, maxRetries, delayMs, label, error: String(err) },
         "ollama.transient_retry",
       );
+      // Surface the retry in the UI — otherwise a slow provider looks like a hang.
+      emitAgentEvent("model_retry", {
+        label,
+        attempt: attempt + 1,
+        maxRetries,
+        delayMs,
+        error: err instanceof Error ? err.message : String(err),
+      });
       await Bun.sleep(delayMs);
     }
   }

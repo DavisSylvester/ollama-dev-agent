@@ -10,6 +10,7 @@ const GLYPH: Record<Task['status'], string> = {
   in_progress: '[-]',
   complete: '[✓]',
   failed: '[X]',
+  blocked: '[~]',
 };
 
 function nowIso(): string {
@@ -20,7 +21,7 @@ export function stampStarted(task: Task): Task {
   return { ...task, status: 'in_progress', startedAt: nowIso() };
 }
 
-export function stampFinished(task: Task, status: 'complete' | 'failed'): Task {
+export function stampFinished(task: Task, status: 'complete' | 'failed' | 'blocked'): Task {
   return { ...task, status, completedAt: nowIso() };
 }
 
@@ -32,7 +33,12 @@ function row(t: Task): string {
     .filter((s) => s.length > 0)
     .join('  ');
   const suffix = times.length > 0 ? `  ${times}` : '';
-  return `- ${GLYPH[t.status]} ${t.id}  ${t.name}${suffix}`;
+  const why = t.status === 'failed' && t.failureReason
+    ? `  — ${t.failureReason}`
+    : t.status === 'blocked' && t.blockedBy && t.blockedBy.length > 0
+      ? `  — blocked by ${t.blockedBy.join(', ')}`
+      : '';
+  return `- ${GLYPH[t.status]} ${t.id}  ${t.name}${suffix}${why}`;
 }
 
 // Pure renderer for feature-results/<slug>/PROGRESS.md: one section per domain
@@ -45,6 +51,7 @@ export function buildProgressBoard(
   const complete = tasks.filter((t) => t.status === 'complete').length;
   const inProgress = tasks.filter((t) => t.status === 'in_progress').length;
   const failed = tasks.filter((t) => t.status === 'failed').length;
+  const blocked = tasks.filter((t) => t.status === 'blocked').length;
 
   const sections = TASK_DOMAINS.map((domain) => {
     const inDomain = tasks.filter((t) => t.domain === domain);
@@ -57,7 +64,7 @@ export function buildProgressBoard(
 **Feature Slug**: ${featureSlug}
 **Updated**: ${nowIso()}
 
-✓ ${complete} / ${tasks.length} complete · ${inProgress} in-progress · ${failed} failed
+✓ ${complete} / ${tasks.length} complete · ${inProgress} in-progress · ${failed} failed · ${blocked} blocked
 
 ${sections.join('\n\n')}
 `;
@@ -130,6 +137,7 @@ export function startProgressBoard(): { stop: () => void } {
   agentEvents.on('prd_generated', seed);
   agentEvents.on('plan_sized', seed);
   agentEvents.on('run_resumed', seed);
+  agentEvents.on('tasks_updated', seed);
   agentEvents.on('task_started', onStarted);
   agentEvents.on('task_complete', onComplete);
   agentEvents.on('task_failed', onFailed);
@@ -140,6 +148,7 @@ export function startProgressBoard(): { stop: () => void } {
       agentEvents.off('prd_generated', seed);
       agentEvents.off('plan_sized', seed);
       agentEvents.off('run_resumed', seed);
+      agentEvents.off('tasks_updated', seed);
       agentEvents.off('task_started', onStarted);
       agentEvents.off('task_complete', onComplete);
       agentEvents.off('task_failed', onFailed);

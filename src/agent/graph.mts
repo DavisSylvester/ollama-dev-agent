@@ -19,10 +19,10 @@ import { saveRunState, buildRunState } from './run-state.mts';
 import { stampStarted, stampFinished } from './progress-board.mts';
 import type { AgentStateType } from './state.mts';
 import type { Task } from '../types/index.mts';
+import { blockingRootCauses, resolveSplitDependencies } from './task-graph.mts';
 
-function nowIsoOrNull(tasks: Task[], id: string): string | null {
-  return tasks.find((t) => t.id === id)?.completedAt ?? null;
-}
+export { blockingRootCauses, resolveSplitDependencies } from './task-graph.mts';
+
 
 /**
  * Thrown when the provider's quota stays exhausted for longer than
@@ -212,36 +212,46 @@ export async function ratifyPlanNode(
 // ready tasks, then the conditional edge loops back if more remain.
 
 export async function runTaskNode(
-  state: AgentStateType,
+  inputState: AgentStateType,
 ): Promise<Partial<AgentStateType>> {
+  // Repair dependencies on split parents first (also heals saved runs).
+  const state: AgentStateType = { ...inputState, tasks: resolveSplitDependencies(inputState.tasks) };
   const readyTasks = findReadyTasks(state.tasks);
 
   if (readyTasks.length === 0) {
-    // Nothing is ready. Any tasks still pending are permanently blocked by a
-    // failed dependency and can never run. Mark them failed so (a) the run
-    // terminates instead of looping forever (routeAfterTask would otherwise see
-    // pending tasks and route back here with no progress), and (b) the results
-    // reflect reality.
+    // Nothing is ready. Any tasks still pending can never run: a task they
+    // depend on failed. Mark them `blocked` (not failed — they never ran), each
+    // with the failed task(s) at the root of its chain, so (a) the run
+    // terminates instead of looping forever and (b) the user sees what to fix.
     const blocked = state.tasks.filter((t) => t.status === 'pending');
     if (blocked.length === 0) {
       return { phase: 'executing_tasks' };
     }
 
-    const blockedIds = new Set(blocked.map((t) => t.id));
+    const rootCauses = blockingRootCauses(state.tasks);
     const mergedTasks: Task[] = state.tasks.map((t) =>
-      blockedIds.has(t.id) ? stampFinished(t, 'failed') : t,
+      t.status === 'pending' ? { ...stampFinished(t, 'blocked'), blockedBy: rootCauses.get(t.id) ?? [] } : t,
     );
 
-    for (const t of blocked) {
-      emitAgentEvent('task_failed', {
-        taskId: t.id,
-        taskName: t.name,
-        iterations: 0,
-        reason: 'Blocked by a failed dependency',
-        completedAt: nowIsoOrNull(mergedTasks, t.id),
-      });
+    for (const t of mergedTasks.filter((m) => m.status === 'blocked')) {
+      emitAgentEvent('task_blocked', { taskId: t.id, taskName: t.name, blockedBy: t.blockedBy ?? [] });
     }
 
+    await saveRunState(
+      buildRunState({
+        featureSlug: state.featureSlug,
+        featureName: state.featureName,
+        userPrompt: state.userPrompt,
+        prdFile: state.prdFile,
+        workingDirectory: state.workingDirectory,
+        prd: state.prd,
+        tasks: mergedTasks,
+      }),
+    ).catch((err: unknown) => {
+      logger.error({ error: String(err) }, 'graph.state_save_failed');
+    });
+
+    emitAgentEvent('tasks_updated', { tasks: mergedTasks });
     return { tasks: mergedTasks, phase: 'executing_tasks' };
   }
 
@@ -302,7 +312,7 @@ export async function runTaskNode(
       // as in progress forever.
       const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
       logger.error({ taskId: task.id, error: reason }, 'graph.task_crashed');
-      const finished = stampFinished(task, 'failed');
+      const finished = { ...stampFinished(task, 'failed'), failureReason: `Crashed: ${reason}` };
       mergedTasks = mergedTasks.map((t) => (t.id === task.id ? finished : t));
       emitAgentEvent('task_failed', {
         taskId: task.id,
@@ -368,6 +378,10 @@ export async function runTaskNode(
   } else {
     quotaPauseStartedAt = null;
   }
+
+  // Keep the UI's task list in step with the scheduler (splits, failures,
+  // quota resets) — it otherwise only sees individual task events.
+  emitAgentEvent('tasks_updated', { tasks: mergedTasks });
 
   return {
     tasks: mergedTasks,
@@ -437,6 +451,9 @@ async function runSingleTask(
       onToolCall: (toolName, args) => {
         emitAgentEvent('tool_called', { toolName, args, taskId: task.id });
       },
+      onIterationEnd: (taskId, iteration, outcome, detail) => {
+        emitAgentEvent('iteration_finished', { taskId, iteration, maxIterations: state.maxIterations, outcome, detail: detail.slice(0, 300) });
+      },
       onToolResult: (toolName, args, result) => {
         // Only the tail is shown, so don't ship whole file contents to the UI.
         emitAgentEvent('tool_result', { toolName, args, taskId: task.id, output: result.slice(-2000) });
@@ -458,13 +475,14 @@ async function runSingleTask(
       taskId: task.id,
       taskName: task.name,
       iterations: lastIterationCount,
-      reason: `Exhausted ${state.maxIterations} iterations without SHIP decision`,
+      reason: task.failureReason ?? `Exhausted ${state.maxIterations} iterations without SHIP decision`,
       completedAt: finished.completedAt ?? null,
     });
   }
 
   return { ...finished, iterationCount: lastIterationCount };
 }
+
 
 // Returns all pending tasks whose dependencies are fully satisfied
 function findReadyTasks(tasks: Task[]): Task[] {
@@ -488,11 +506,14 @@ async function generateResultsNode(
 
   const completedTasks = state.tasks.filter((t) => t.status === 'complete');
   const failedTasks = state.tasks.filter((t) => t.status === 'failed');
+  const blockedTasks = state.tasks.filter((t) => t.status === 'blocked');
+  const notRunTasks = state.tasks.filter((t) => t.status === 'pending' || t.status === 'in_progress');
 
   const taskRows = state.tasks
     .map((t) => {
-      const icon = t.status === 'complete' ? '✓' : t.status === 'failed' ? '✗' : '○';
-      return `| ${icon} | ${t.id} | ${t.name} | ${t.status} | ${t.iterationCount} |`;
+      const icon = t.status === 'complete' ? '✓' : t.status === 'failed' ? '✗' : t.status === 'blocked' ? '⊘' : '○';
+      const note = t.status === 'failed' ? (t.failureReason ?? '') : t.status === 'blocked' ? `blocked by ${(t.blockedBy ?? []).join(', ')}` : '';
+      return `| ${icon} | ${t.id} | ${t.name} | ${t.status} | ${t.iterationCount} | ${note.replace(/\|/g, '/')} |`;
     })
     .join('\n');
 
@@ -506,11 +527,12 @@ async function generateResultsNode(
 - **Total Tasks**: ${state.tasks.length}
 - **Completed**: ${completedTasks.length}
 - **Failed**: ${failedTasks.length}
-
+- **Blocked** (never ran — a task they depend on failed): ${blockedTasks.length}
+${notRunTasks.length > 0 ? `- **Not run**: ${notRunTasks.length}\n` : ''}
 ## Task Results
 
-| Status | ID | Name | Result | Iterations |
-|--------|----|------|--------|------------|
+| Status | ID | Name | Result | Iterations | Notes |
+|--------|----|------|--------|------------|-------|
 ${taskRows}
 
 ## Completed Tasks
@@ -519,7 +541,13 @@ ${completedTasks.length > 0 ? completedTasks.map((t) => `- **${t.id}**: ${t.name
 
 ## Failed Tasks
 
-${failedTasks.length > 0 ? failedTasks.map((t) => `- **${t.id}**: ${t.name}`).join('\n') : '_None_'}
+${failedTasks.length > 0 ? failedTasks.map((t) => `- **${t.id}**: ${t.name}${t.failureReason ? ` — ${t.failureReason}` : ''}`).join('\n') : '_None_'}
+
+## Blocked Tasks
+
+${blockedTasks.length > 0
+    ? `${blockedTasks.length} task(s) never ran because a task they depend on failed (${[...new Set(blockedTasks.flatMap((t) => t.blockedBy ?? []))].sort().join(', ')}). Fix or retry those, then re-run the same command.`
+    : '_None_'}
 `;
 
   const resultsDir = join('feature-results', state.featureSlug);
@@ -539,6 +567,11 @@ ${failedTasks.length > 0 ? failedTasks.map((t) => `- **${t.id}**: ${t.name}`).jo
     featureSlug: state.featureSlug,
     completedCount: completedTasks.length,
     failedCount: failedTasks.length,
+    blockedCount: blockedTasks.length,
+    totalCount: state.tasks.length,
+    failed: failedTasks.map((t) => ({ id: t.id, name: t.name, reason: t.failureReason ?? '' })),
+    blockers: [...new Set(blockedTasks.flatMap((t) => t.blockedBy ?? []))].sort(),
+    userPrompt: state.userPrompt,
   });
 
   return { phase: 'complete' };
