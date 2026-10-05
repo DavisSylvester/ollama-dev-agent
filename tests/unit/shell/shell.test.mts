@@ -159,3 +159,10 @@ describe('shell_exec on this machine', () => {
     expect(out.stderr).toContain('not installed');
   });
 });
+
+describe('checkCommand — script paths follow the target platform', () => {
+  it('resolves a relative script against a POSIX cwd on Linux', () => {
+    const linux: CommandCheckDeps = { platform: 'linux', cwd: '/srv/proj', which: () => null, exists: (p) => p === '/srv/proj/scripts/build.sh' };
+    expect(checkCommand('./scripts/build.sh', { kind: 'bash', name: 'bash', path: '/bin/bash' }, linux)).toEqual([]);
+  });
+});

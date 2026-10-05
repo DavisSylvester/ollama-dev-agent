@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from 'node:path';
+import { posix, win32 } from 'node:path';
 import { SHELL_KIND, type ShellInfo } from './resolve-shell.mts';
 
 // ---------------------------------------------------------------------------
@@ -136,7 +136,9 @@ function programExists(program: string, shell: ShellInfo, deps: CommandCheckDeps
     return true;
   }
   if (/[\\/]/.test(program)) {
-    const full = isAbsolute(program) ? program : resolve(deps.cwd, program);
+    // Resolve with the target platform's path rules, not the host's.
+    const path = deps.platform === 'win32' ? win32 : posix;
+    const full = path.isAbsolute(program) ? program : path.resolve(deps.cwd, program);
     if (deps.exists(full)) return true;
     return deps.platform === 'win32' && ['.exe', '.cmd', '.bat', '.ps1'].some((ext) => deps.exists(`${full}${ext}`));
   }
