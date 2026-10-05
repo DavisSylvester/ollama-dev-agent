@@ -187,6 +187,19 @@ describe('RalphLoop.runTask — max iterations', () => {
     expect(result).toBe('failed');
     expect(task.status).toBe('failed');
     expect(task.iterationCount).toBe(3); // maxIterations = 3
+    expect(task.failureReason).toMatch(/^3 attempts: 3× REVISE/);
+  });
+
+  it('reports every attempt outcome through onIterationEnd', async () => {
+    const task = makeTask();
+    const seen: string[] = [];
+    const deps: RalphRunnerDeps = {
+      lintFn: makeCleanLint(),
+      workerFn: async () => 'incomplete',
+      reviewerFn: async () => makeReviseDecision(),
+    };
+    await loop.runTask(task, NO_TOOLS, { onIterationEnd: (_id, iteration, outcome) => { seen.push(`${iteration}:${outcome}`); } }, deps);
+    expect(seen).toEqual(['1:revise', '2:revise', '3:revise']);
   });
 });
 

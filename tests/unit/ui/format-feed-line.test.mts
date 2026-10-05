@@ -27,3 +27,23 @@ describe('formatFeedLine', () => {
     expect(formatFeedLine('tool_called', { toolName: 'read_file' })).toBeNull();
   });
 });
+
+describe('formatFeedLine — execution feedback', () => {
+  it('describes a model retry with the wait', () => {
+    expect(formatFeedLine('model_retry', { error: 'Model call timed out after 180s', attempt: 2, maxRetries: 3, delayMs: 4000 }))
+      .toBe('⟳ model call failed (Model call timed out after 180s) — retry 2/3 in 4s');
+  });
+
+  it('describes each attempt outcome', () => {
+    expect(formatFeedLine('iteration_finished', { taskId: 'TASK-003-2', iteration: 2, maxIterations: 5, outcome: 'worker_error', detail: 'Worker encountered an unexpected error: Model call timed out after 180s' }))
+      .toBe('  TASK-003-2 attempt 2/5: model call failed — Model call timed out after 180s');
+    expect(formatFeedLine('iteration_finished', { taskId: 'T', iteration: 1, maxIterations: 5, outcome: 'ship', detail: '' }))
+      .toBe('  T attempt 1/5: SHIP ✓');
+  });
+
+  it('describes quota pauses, failures and completions', () => {
+    expect(formatFeedLine('quota_paused', { waitMinutes: 15, taskIds: ['A'] })).toContain('pausing 15 min');
+    expect(formatFeedLine('task_failed', { taskId: 'A', reason: '5 attempts: 5× model call failed' })).toBe('✗ A failed — 5 attempts: 5× model call failed');
+    expect(formatFeedLine('task_complete', { taskId: 'A', iterations: 2 })).toBe('✓ A complete after 2 attempt(s)');
+  });
+});

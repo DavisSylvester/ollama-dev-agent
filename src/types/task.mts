@@ -21,9 +21,14 @@ export interface Task {
   // task enters in_progress; completedAt when it reaches complete/failed.
   startedAt?: string | null;
   completedAt?: string | null;
+  // Why the task failed, in one line (e.g. "5 attempts: 3× model timeout, 2× REVISE").
+  failureReason?: string;
+  // For a blocked task: the failed/blocked tasks it was waiting on.
+  blockedBy?: string[];
 }
 
-export type TaskStatus = 'pending' | 'in_progress' | 'complete' | 'failed';
+// blocked = never ran because a task it depends on failed (or is itself blocked).
+export type TaskStatus = 'pending' | 'in_progress' | 'complete' | 'failed' | 'blocked';
 
 export interface RalphIteration {
   readonly taskId: string;

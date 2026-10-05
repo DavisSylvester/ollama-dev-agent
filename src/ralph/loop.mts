@@ -20,6 +20,7 @@ interface RalphLoopEvents {
   onReviewerComplete?: (taskId: string, decision: ReviewDecision) => void;
   onToolCall?: (toolName: string, args: Record<string, unknown>) => void;
   onToolResult?: (toolName: string, args: Record<string, unknown>, result: string) => void;
+  onIterationEnd?: (taskId: string, iteration: number, outcome: IterationOutcomeKind, detail: string) => void;
 }
 
 // Injected runner functions — used by tests to avoid real LLM/lint calls.
@@ -72,6 +73,14 @@ export class RalphLoop {
     // Count of issues logged across iterations so we can record a final
     // "resolved" marker on SHIP only when the task actually struggled.
     let issuesLogged = 0;
+
+    // What each attempt ended with, so a failed task carries a real reason and
+    // the UI can show every attempt's result as it happens.
+    const outcomes: IterationOutcome[] = [];
+    const note = (iteration: number, kind: IterationOutcomeKind, detail: string): void => {
+      outcomes.push({ kind, detail });
+      events?.onIterationEnd?.(task.id, iteration, kind, detail);
+    };
 
     for (let iteration = 1; iteration <= this.maxIterations; iteration++) {
       logger.info(
@@ -162,6 +171,7 @@ export class RalphLoop {
       // overwriting the feedback file would lose the last real review — so keep
       // that feedback for the next attempt and move on.
       if (workerErrored) {
+        note(iteration, 'worker_error', workerOutput);
         try {
           await this.contextManager.saveActivityEntry(
             task.id,
@@ -189,6 +199,7 @@ export class RalphLoop {
       // another iteration with targeted feedback. The worker may have left files
       // in a partial state, so it is unsafe to let the reviewer SHIP from here.
       if (workerOutput.startsWith(REACT_TIMEOUT_SENTINEL)) {
+        note(iteration, 'timeout', workerOutput.includes('wall-clock') ? 'ran out of time' : 'ran out of steps');
         logger.warn(
           { taskId: task.id, iteration, durationMs: workerDurationMs, toolCallCount: toolCallLog.length },
           'ralph.worker_timeout: step budget exhausted; skipping reviewer, forcing REVISE',
@@ -260,6 +271,7 @@ export class RalphLoop {
       events?.onLintComplete?.(task.id, lintResult.clean, lintResult.output);
 
       if (!lintResult.clean) {
+        note(iteration, 'lint_failed', firstLine(lintResult.output));
         logger.warn(
           { taskId: task.id, iteration, lintErrorCount: lintResult.output.split('\n').length },
           'ralph.lint_failed: unfixable errors remain; skipping reviewer, forcing REVISE',
@@ -316,6 +328,7 @@ export class RalphLoop {
         // an error message) and don't record a lesson; just try again.
         const message = err instanceof Error ? err.message : String(err);
         logger.error({ taskId: task.id, iteration, error: message }, 'ralph.reviewer_error');
+        note(iteration, 'reviewer_error', message);
         try {
           await this.contextManager.saveActivityEntry(
             task.id,
@@ -355,6 +368,7 @@ export class RalphLoop {
       }
 
       if (decision.decision === 'revise') {
+        note(iteration, 'revise', decision.issues[0] ?? firstLine(decision.feedback));
         try {
           await this.contextManager.saveActivityEntry(
             task.id,
@@ -376,6 +390,7 @@ export class RalphLoop {
       task.iterationCount = iteration;
 
       if (decision.decision === 'ship') {
+        note(iteration, 'ship', '');
         try {
           await this.contextManager.markTaskComplete(task.id);
         } catch {
@@ -415,6 +430,7 @@ export class RalphLoop {
       this.maxIterations,
       'failed',
     );
+    task.failureReason = summarizeOutcomes(outcomes);
     task.status = 'failed';
     return 'failed';
   }
@@ -665,6 +681,43 @@ function summarizeToolCalls(log: ToolCallEntry[]): string {
     counts.set(entry.toolName, (counts.get(entry.toolName) ?? 0) + 1);
   }
   return [...counts.entries()].map(([name, count]) => `${name} (${count}x)`).join(', ');
+}
+
+export type IterationOutcomeKind = 'ship' | 'revise' | 'lint_failed' | 'timeout' | 'worker_error' | 'reviewer_error';
+
+export interface IterationOutcome {
+  kind: IterationOutcomeKind;
+  detail: string;
+}
+
+const OUTCOME_LABELS: Record<IterationOutcomeKind, string> = {
+  ship: 'shipped',
+  revise: 'REVISE',
+  lint_failed: 'lint failed',
+  timeout: 'timed out',
+  worker_error: 'model call failed',
+  reviewer_error: 'reviewer error',
+};
+
+export function outcomeLabel(kind: IterationOutcomeKind): string {
+  return OUTCOME_LABELS[kind];
+}
+
+/**
+ * One-line reason a task failed, e.g.
+ * "5 attempts: 3× model call failed, 2× REVISE — last: Model call timed out after 180s".
+ */
+export function summarizeOutcomes(outcomes: readonly IterationOutcome[]): string {
+  if (outcomes.length === 0) return 'no attempts completed';
+  const counts = new Map<IterationOutcomeKind, number>();
+  for (const o of outcomes) counts.set(o.kind, (counts.get(o.kind) ?? 0) + 1);
+  const parts = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([kind, n]) => `${n}× ${OUTCOME_LABELS[kind]}`);
+  const last = outcomes[outcomes.length - 1]!;
+  const detail = last.detail.replace(/^Worker encountered an unexpected error:\s*/, '').replace(/\s+/g, ' ').trim();
+  const lastText = detail ? ` — last: ${detail.length > 140 ? `${detail.slice(0, 139)}…` : detail}` : '';
+  return `${outcomes.length} attempt${outcomes.length === 1 ? '' : 's'}: ${parts.join(', ')}${lastText}`;
 }
 
 const STATUS_LABELS = {

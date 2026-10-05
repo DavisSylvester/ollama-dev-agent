@@ -53,6 +53,9 @@ export class DevAgent {
         totalTasks: tasks.length,
         remainingTasks: tasks.filter((t) => t.status !== 'complete').length,
         tasks,
+        // Statuses as the last run left them (failed / blocked), before the
+        // reset to pending — so the start-of-run summary can say what is retried.
+        previousTasks: resumable.tasks,
       });
     } else if (this.config.prdFile) {
       const prd = await loadPRDFromFile(this.config.prdFile);
