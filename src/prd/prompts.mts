@@ -2,6 +2,7 @@ import type { Task } from '../types/index.mts';
 import type { DebatePersona, ProposedStory, PersonaStance } from './debate.mts';
 import type { DocSummary } from './doc-summarizer.mts';
 import { env } from '../env.mts';
+import { formatTypeScriptVersionRule } from './typescript-version.mts';
 
 export function buildPRDGenerationPrompt(userPrompt: string, research: boolean = true): string {
   const researchSection = research
@@ -124,8 +125,9 @@ These are hard constraints — the planner must reflect them in tasks and Techni
 - **Runtime**: BunJS only — never Node.js, Deno, or browser-native APIs as the server runtime
 - **HTTP server**: Elysia only — never Express, Fastify, Hono, or raw \`Bun.serve()\`
 - **Front-end framework**: Angular (via Angular CLI \`npx @angular/cli@latest new <app> --standalone --strict --skip-git\`) — never React, Vue, Svelte, or plain HTML/vanilla JS. If the feature includes a UI, a task must scaffold Angular first.
-- **HTTP client**: axios only — never fetch, node-fetch, or got
+- **HTTP client**: native \`fetch\` (built into Bun) — never node-fetch or got; do not add axios
 - **Date/time**: luxon only — never \`new Date()\` or \`Date.now()\`
+- **TypeScript version**: the newest stable release on npm as of the day oda runs — never an older pinned version (oda resolves the exact version at runtime)
 - **Testing**: \`bun test\` with \`bun:test\` — never jest or vitest
 - **E2E / browser tests**: Playwright (\`@playwright/test\`) — never Cypress, Puppeteer, or Selenium
 - **Package scope**: all internal libraries scoped to \`@davissylvester\` — never \`@oda\`, \`@local\`, or unscoped
@@ -305,6 +307,7 @@ export function buildWorkerPrompt(
   directoryListing: string = '',
   availablePackages: string = '',
   knowledgeBase: string = '',
+  latestTypeScriptVersion: string | null = null,
 ): string {
   const stepBudget = env.MAX_REACT_STEPS;
   const explorationBudget = Math.min(3, Math.floor(stepBudget * 0.15));
@@ -434,6 +437,7 @@ ${step1}
 
 ## TypeScript Standards
 
+${formatTypeScriptVersionRule(latestTypeScriptVersion)}
 - Use **strict mode** TypeScript — never use \`any\`, use \`unknown\` or proper types
 - All source files must use the \`.mts\` extension
 - **All filenames must use kebab-case** — e.g., \`add-card.mts\`, \`board-state.mts\`, \`get-board.test.mts\`; never camelCase (\`addCard.mts\`) or PascalCase (\`AddCard.mts\`)
@@ -443,22 +447,63 @@ ${step1}
 - **Do NOT mark interface properties readonly** — it breaks Partial<T>, object builders, and interface extension; use Readonly<T> at call sites only where immutability must be enforced
 - Prefer \`interface\` for object shapes; \`type\` for unions and aliases
 - **Keep methods under 50 lines** — if a method grows beyond that, extract a private helper; long methods are a sign the logic needs splitting
+- Give every variable an explicit type, and every class member an explicit access modifier (\`public\`, \`private\`, \`protected\`)
+- Use \`as const\` objects instead of \`enum\`
+- Prefer \`satisfies\` over type assertions; avoid \`as\` unless there is no other way
+- **One interface per file**, named with an \`i-\` prefix (e.g. \`i-card.mts\`), grouped by feature in an \`interfaces/\` folder with an \`index.mts\` barrel
+
+## Error Handling
+
+- Return a \`Result<T, E>\` type or a discriminated union for recoverable errors
+- Reserve \`throw\` for truly unexpected errors
+- Use typed error classes instead of a bare \`Error\`
+
+## Validation
+
+- **Use TypeBox for all schema validation — never Zod**
+- Elysia routes: use \`t\` from \`'elysia'\` for body, query and params
+- Env validation: \`Value.Parse()\` from \`@sinclair/typebox/value\`
+- Schema first: define the schema, derive the type with \`Static<typeof schema>\`, and keep derived types in a \`types/\` folder with an \`index.mts\` barrel
+
+## Architecture & Dependency Injection
+
+- Split backend code into three layers: **Router** (HTTP in and out only), **Service** (business logic), **Repository** (all data access)
+- Routers and services must **never** touch the data layer directly — go through a repository
+- Register and resolve all services, repositories, API clients and configuration through DI — no \`new\` of a service or repository inside another service or a router
+
+## Logging
+
+- Backend code (APIs, libraries) logs with **Winston** — no \`console.*\` statements
+- Front-end apps may use \`console.*\`
+
+## Code Formatting
+
+- Single quotes for strings
+- Trailing commas in multiline expressions
+- Arrow functions for callbacks
+- Named exports — never \`export default\`
+- A blank line after a class's opening brace, before its first member
+
+## Tooling
+
+- Use **Bun** for everything: \`bun add\`, \`bun remove\`, \`bun test\` — never npm, yarn or pnpm
+- MongoDB: use the latest driver (\`mongodb@^7\`) and \`mongodb-memory-server@^11\` for tests — never downgrade to v6
 
 ## CSS & Styling
 
 - **All CSS and SCSS must live in dedicated style files** — never use inline styles (\`style={{ }}\` or \`style="..."\`) or CSS-in-JS
-- Each component or module should have a corresponding \`.css\` or \`.scss\` file (e.g. \`card.tsx\` → \`card.scss\`)
+- Each component or module should have a corresponding style file (e.g. \`card.component.ts\` → \`card.component.scss\`) — **prefer SCSS over plain CSS and over Tailwind**
 - **Prefer flexbox** for all layout — use \`display: flex\` with \`flex-direction\`, \`justify-content\`, and \`align-items\` before reaching for grid, float, or absolute positioning
 - Use CSS variables for colors, spacing, and typography tokens — no hard-coded hex values or magic numbers
 - **Avoid \`!important\`** — only use it when overriding third-party styles you cannot control; never use it to fix specificity problems in your own code
 
 ## HTTP Requests
 
-- **Always use [axios](https://axios-http.com/)** for all HTTP requests — never use \`fetch\`, \`new Request()\`, \`node-fetch\`, or \`got\`
+- **Use the native [\`fetch\`](https://bun.sh/docs/api/fetch) API** for all HTTP requests — it is built into Bun and the browser, so no import or install is needed
+- Never use \`node-fetch\` or \`got\`, and do not add axios as a dependency
 - This applies to both application code **and test files**
-- Import with: \`import axios from 'axios';\`
-- For typed responses: \`const { data } = await axios.get<MyType>(url);\`
-- Axios is already installed in the project (\`bun add axios\` is not needed)
+- Check \`response.ok\` before reading the body — \`fetch\` does not reject on 4xx/5xx
+- For typed responses: \`const data: MyType = (await response.json()) as MyType;\` (or validate with a TypeBox schema)
 
 ## Front-End Framework
 
@@ -466,13 +511,17 @@ ${step1}
 - Before scaffolding, check https://angular.dev/cli for the latest Angular CLI version and use it: \`npx @angular/cli@latest new <app>\`
 - Always generate with standalone components (\`--standalone\`), strict mode (\`--strict\`), and skip git (\`--skip-git\`)
 - Use the Angular CLI for all code generation — never hand-write boilerplate that the CLI produces
+- Standalone components only — no NgModules
+- Keep each component's template and styles in separate \`.html\` and \`.scss\` files — no inline \`template\` or \`styles\`
+- No paid UI libraries — use plain SCSS or Angular Material
 
 ## HTTP Server
 
 - **Always use [Elysia](https://elysiajs.com/)** if an HTTP server is needed — never use Express, Fastify, Hono, or raw \`Bun.serve()\`
 - Before writing any server code, use \`read_file\` on the Elysia changelog or run \`bun add elysia@latest\` to confirm the current version
 - Check https://elysiajs.com for the latest API — Elysia evolves quickly and older patterns may be deprecated
-- Follow the global Elysia standards: route schemas with Zod/TypeBox, controllers for HTTP only, services for business logic, repositories for data access
+- Follow the global Elysia standards: route schemas with TypeBox (\`t\` from \`'elysia'\`), routers for HTTP only, services for business logic, repositories for data access
+- **Health endpoints are \`/health\` (liveness) and \`/ready\` (readiness)** — never \`/healthz\` or \`/readyz\`, anywhere (routes, Dockerfile \`HEALTHCHECK\`, probes, docs)
 
 ## Date & Time
 
@@ -514,14 +563,14 @@ Rules:
 - Every endpoint handler must return \`ApiResponse<T>\` — no exceptions
 - Use Elysia's \`onError\` hook for centralized error catching — never inline try/catch in route handlers
 - Map errors to appropriate HTTP status codes: 400 bad request, 401 unauthorized, 404 not found, 422 validation, 500 internal
-- Validation errors from Zod/TypeBox are caught automatically by Elysia — do not re-wrap them
+- Validation errors from TypeBox are caught automatically by Elysia — do not re-wrap them
 - Never leak stack traces or internal error messages to the client response
 
 ## E2E & Browser Testing
 
 - **Always use [Playwright](https://playwright.dev/)** for all E2E and browser-based tests — never use Cypress, Puppeteer, or Selenium
-- **Always use the Playwright MCP server** when running or interacting with Playwright during a session — use the \`mcp__plugin_playwright_playwright__*\` tools directly; never shell out to the Playwright CLI
-- For local API test calls or HTML server testing that require browser context, use a **headless browser via Playwright** — never use raw \`fetch\` or axios for tests that require JS execution, cookies, or rendered HTML
+- Run Playwright through its CLI (\`bunx playwright test\`) — do not depend on a Playwright MCP server
+- For local API test calls or HTML server testing that require browser context, use a **headless browser via Playwright** — never use raw \`fetch\` for tests that require JS execution, cookies, or rendered HTML
 - Install Playwright with: \`bun add -d @playwright/test\` then \`bunx playwright install\`
 - Configure the browser under test in \`playwright.config.ts\` using the \`projects\` array
 
@@ -549,6 +598,7 @@ export function buildReviewerPrompt(
   workerOutput: string,
   featureName: string,
   fileContents: readonly LoadedFile[] = [],
+  latestTypeScriptVersion: string | null = null,
 ): string {
   const filesSection =
     fileContents.length > 0
@@ -583,7 +633,7 @@ ${filesSection}
 
 **You may only flag violations for things that ARE PRESENT in the code you were given.**
 
-- Do NOT flag missing features. If the task spec does not require Angular, do not demand it. If there is no CSS in the implementation, check 4 does not apply. If there are no HTTP client calls, check 5 does not apply. If there is no frontend, checks 6 and 9 do not apply. If there is no HTTP server, checks 7 and 8 do not apply.
+- Do NOT flag missing features. If the task spec does not require Angular, do not demand it. If there is no CSS in the implementation, check 4 does not apply. If there are no HTTP client calls, check 5 does not apply. If there is no frontend, checks 6 and 9 do not apply. If there is no HTTP server, checks 7 and 8 do not apply. Each item in check 10 applies only when that construct appears in the code.
 - Before listing any issue, confirm: "This violation **is present** in the code embedded above."
 - Do not invent requirements beyond what is in the Description and Acceptance Criteria. The absence of a feature is NOT a violation unless the spec explicitly requires it.
 
@@ -598,13 +648,15 @@ ${filesSection}
    - \`.mts\` extensions on all imports between project files
    - No implicit \`any\` from missing types
    - Any method exceeding 50 lines — flag it and request extraction into a private helper
+   - **REVISE immediately** if a \`package.json\` shown above pins \`typescript\` below ${latestTypeScriptVersion ? `\`${latestTypeScriptVersion}\`` : 'the newest stable release'} — unless the worker's report names a required tool that does not support the newer version yet
    - **REVISE immediately** if any filename uses camelCase or PascalCase (e.g., \`addCard.mts\`, \`AddCard.mts\`) — all filenames must be kebab-case (e.g., \`add-card.mts\`)
 4. Check for CSS & styling violations — **REVISE immediately if any of these appear**:
    - Inline styles (\`style={{ }}\` or \`style="..."\`) — must move to a \`.css\` or \`.scss\` file
    - \`position: absolute\` or \`float:\` used for layout instead of flexbox
 5. Check for HTTP client violations — **REVISE immediately if any of these appear** in application or test files:
-   - \`fetch(\` or \`new Request(\` — must be replaced with \`axios\`
-   - \`node-fetch\` or \`got\` imports — must be replaced with \`axios\`
+   - \`node-fetch\` or \`got\` imports — must be replaced with native \`fetch\`
+   - \`fetch\` responses used without checking \`response.ok\` (or \`response.status\`) — 4xx/5xx do not reject
+   - Native \`fetch\` and \`new Request(\` are allowed — do NOT flag them
 6. Check for front-end framework violations — **REVISE immediately if any of these appear** without explicit task instruction:
    - \`react\`, \`vue\`, \`svelte\`, or plain HTML used as the front-end framework — must be replaced with Angular
 7. Check for HTTP server violations — **REVISE immediately if any of these appear**:
@@ -615,10 +667,18 @@ ${filesSection}
    - Stack traces or internal error details exposed in the response body
 9. Check for E2E / browser testing violations — **REVISE immediately if any of these appear**:
    - \`cypress\`, \`puppeteer\`, or \`selenium\` used instead of Playwright — must be replaced with \`@playwright/test\`
-   - Playwright CLI called via shell (\`run_command('playwright test')\`) instead of the Playwright MCP server tools
-   - Raw \`fetch\` or \`axios\` used in tests that require browser context, JS execution, cookies, or rendered HTML — must use Playwright
-10. Check for correctness: logic errors, edge cases not handled, missing error handling
-11. Trust the worker's test results — you cannot run them
+   - Raw \`fetch\` used in tests that require browser context, JS execution, cookies, or rendered HTML — must use Playwright
+10. Check for coding-standard violations — **REVISE immediately if any of these appear**:
+   - \`zod\` imported anywhere — schema validation must use TypeBox
+   - \`console.*\` in backend code (APIs, libraries) — must log with Winston; front-end code may use \`console.*\`
+   - An \`enum\` declaration — must be an \`as const\` object
+   - \`export default\` — must be a named export
+   - A health route or probe at \`/healthz\` or \`/readyz\` — must be \`/health\` and \`/ready\`
+   - A router or service querying the database directly instead of going through a repository
+   - A service or repository created with \`new\` inside another service or a router instead of being resolved through DI
+   - \`mongodb\` pinned below v7 or \`mongodb-memory-server\` below v11 in a \`package.json\` shown above
+11. Check for correctness: logic errors, edge cases not handled, missing error handling
+12. Trust the worker's test results — you cannot run them
 
 ## Pre-Completion Checklist (REQUIRED before DECISION)
 

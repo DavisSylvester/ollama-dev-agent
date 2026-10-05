@@ -7,13 +7,12 @@ import { DevAgent } from './src/agent/index.mts';
 import { agentEvents } from './src/agent/events.mts';
 import { resolve } from 'node:path';
 
-// Target Ollama Cloud. The local model tags don't all exist on cloud, so map
-// each role to its nearest cloud equivalent. OLLAMA_API_KEY comes from .env.
+// Target Ollama Cloud with glm-5.3 for every role. OLLAMA_API_KEY comes from .env.
 applyEnvOverrides({
   OLLAMA_BASE_URL: 'https://ollama.com',
-  PLANNER_MODEL: 'qwen3.5:397b',
-  CODER_MODEL: 'qwen3-coder-next',
-  EDITOR_MODEL: 'devstral-small-2:24b',
+  PLANNER_MODEL: 'glm-5.3:cloud',
+  CODER_MODEL: 'glm-5.3:cloud',
+  EDITOR_MODEL: 'glm-5.3:cloud',
 });
 
 const workingDir = resolve('./test-run/e2e-phase012');

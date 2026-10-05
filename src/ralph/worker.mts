@@ -4,7 +4,7 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createChatModel, resolveCoderModel } from '../models/index.mts';
 import { runReactAgent } from '../models/index.mts';
-import { buildWorkerPrompt } from '../prd/index.mts';
+import { buildWorkerPrompt, resolveLatestTypeScriptVersion } from '../prd/index.mts';
 import { loadKnowledgeBase, categorizeTask, formatForPrompt } from '../knowledge-base/index.mts';
 import { env } from '../env.mts';
 
@@ -73,10 +73,11 @@ export async function runWorker(params: WorkerParams): Promise<string> {
     onToolCall,
   } = params;
 
-  const [directoryListing, availablePackages, kb] = await Promise.all([
+  const [directoryListing, availablePackages, kb, latestTypeScriptVersion] = await Promise.all([
     buildDirectoryListing(workingDirectory),
     readAvailablePackages(workingDirectory),
     loadKnowledgeBase(),
+    resolveLatestTypeScriptVersion(),
   ]);
 
   // Feed prior known issues + resolutions (most relevant category first) so the
@@ -93,6 +94,7 @@ export async function runWorker(params: WorkerParams): Promise<string> {
     directoryListing,
     availablePackages,
     knowledgeBase,
+    latestTypeScriptVersion,
   );
 
   const userPrompt =

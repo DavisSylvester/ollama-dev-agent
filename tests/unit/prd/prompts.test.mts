@@ -242,10 +242,15 @@ describe('buildReviewerPrompt', () => {
     expect(prompt).toContain('.mts');
   });
 
-  it('flags fetch and new Request as violations requiring REVISE', () => {
-    expect(prompt).toContain('fetch(');
-    expect(prompt).toContain('new Request(');
+  it('flags node-fetch and got as violations requiring REVISE', () => {
+    expect(prompt).toContain('node-fetch');
+    expect(prompt).toContain('got');
     expect(prompt).toContain('REVISE immediately');
+  });
+
+  it('allows native fetch and no longer demands axios', () => {
+    expect(prompt).toContain('Native `fetch` and `new Request(` are allowed');
+    expect(prompt).not.toContain('must be replaced with `axios`');
   });
 });
 
@@ -302,14 +307,14 @@ describe('buildReviewerPrompt — hallucination guard', () => {
 describe('buildWorkerPrompt — HTTP client rule', () => {
   const prompt = buildWorkerPrompt(PENDING_TASK, 1, '', 'Feature', '/dir', '', '');
 
-  it('requires axios for all HTTP requests', () => {
-    expect(prompt).toContain('axios');
+  it('requires native fetch for all HTTP requests', () => {
+    expect(prompt).toContain('native [`fetch`]');
     expect(prompt).toContain('HTTP Requests');
   });
 
-  it('forbids fetch and new Request', () => {
-    expect(prompt).toContain('fetch');
-    expect(prompt).toContain('new Request()');
+  it('forbids node-fetch and got, and does not require axios', () => {
+    expect(prompt).toContain('Never use `node-fetch` or `got`');
+    expect(prompt).not.toContain("import axios from 'axios'");
   });
 
   it('applies the rule to test files as well', () => {
@@ -378,5 +383,58 @@ describe('buildDocsPRDSynthesisPrompt', () => {
     expect(p).toContain('Source Documentation');      // grounding section
     expect(p).toContain('memory/06-api.md');
     expect(p).toContain('CRUD for photos');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Global coding standards (ported from ~/.claude/CLAUDE.md)
+// ---------------------------------------------------------------------------
+
+describe('buildWorkerPrompt — global coding standards', () => {
+  const prompt = buildWorkerPrompt(PENDING_TASK, 1, '', 'Kanban Board', '/project');
+
+  it('requires TypeBox and forbids Zod', () => {
+    expect(prompt).toContain('Use TypeBox for all schema validation — never Zod');
+    expect(prompt).not.toContain('Zod/TypeBox');
+  });
+
+  it('covers error handling, DI layers, logging and formatting', () => {
+    expect(prompt).toContain('## Error Handling');
+    expect(prompt).toContain('Result<T, E>');
+    expect(prompt).toContain('## Architecture & Dependency Injection');
+    expect(prompt).toContain('Winston');
+    expect(prompt).toContain('never `export default`');
+    expect(prompt).toContain('`as const` objects instead of `enum`');
+    expect(prompt).toContain('`i-` prefix');
+  });
+
+  it('names /health and /ready, never the k8s-style endpoints', () => {
+    expect(prompt).toContain('`/health` (liveness) and `/ready` (readiness)');
+  });
+
+  it('runs Playwright through its CLI, not the MCP server', () => {
+    expect(prompt).toContain('bunx playwright test');
+    expect(prompt).not.toContain('mcp__plugin_playwright_playwright__');
+  });
+});
+
+describe('buildReviewerPrompt — coding-standard checks', () => {
+  const prompt = buildReviewerPrompt(PENDING_TASK, 'done', 'Kanban Board');
+
+  it('flags Zod, console.* in backend code, enums and default exports', () => {
+    expect(prompt).toContain('Check for coding-standard violations');
+    expect(prompt).toContain('`zod` imported anywhere');
+    expect(prompt).toContain('`console.*` in backend code');
+    expect(prompt).toContain('An `enum` declaration');
+    expect(prompt).toContain('`export default`');
+  });
+
+  it('flags /healthz and direct data access', () => {
+    expect(prompt).toContain('`/healthz` or `/readyz`');
+    expect(prompt).toContain('instead of going through a repository');
+  });
+
+  it('no longer demands the Playwright MCP server', () => {
+    expect(prompt).not.toContain('Playwright MCP server tools');
   });
 });

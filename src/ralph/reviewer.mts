@@ -1,7 +1,7 @@
 import type { Task, ReviewDecision, ChecklistItem } from '../types/index.mts';
 import { createChatModel, withOllamaRetry } from '../models/index.mts';
 import { SystemMessage, HumanMessage, type AIMessage } from '@langchain/core/messages';
-import { buildReviewerPrompt } from '../prd/index.mts';
+import { buildReviewerPrompt, resolveLatestTypeScriptVersion } from '../prd/index.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 import { join } from 'node:path';
@@ -67,9 +67,18 @@ export async function runReviewer(params: ReviewerParams): Promise<ReviewDecisio
   const { task, featureName, workerOutput, workingDirectory } = params;
 
   // Pre-load the files the worker created so the reviewer doesn't need tools
-  const fileContents = await loadMentionedFiles(workerOutput, workingDirectory);
+  const [fileContents, latestTypeScriptVersion] = await Promise.all([
+    loadMentionedFiles(workerOutput, workingDirectory),
+    resolveLatestTypeScriptVersion(),
+  ]);
 
-  const systemPrompt = buildReviewerPrompt(task, workerOutput, featureName, fileContents);
+  const systemPrompt = buildReviewerPrompt(
+    task,
+    workerOutput,
+    featureName,
+    fileContents,
+    latestTypeScriptVersion,
+  );
 
   const userPrompt =
     `Review the implementation of ${task.id}: ${task.name}\n\n` +
@@ -105,7 +114,9 @@ async function loadMentionedFiles(
   workerOutput: string,
   workingDirectory: string,
 ): Promise<LoadedFile[]> {
-  const paths = extractFilePaths(workerOutput);
+  // The root package.json is always included so the TypeScript version check
+  // runs even when the worker's report never mentions it.
+  const paths = ['package.json', ...extractFilePaths(workerOutput).filter((p) => p !== 'package.json')];
   const MAX_FILES = 6;
   const MAX_FILE_BYTES = 8000;
 
