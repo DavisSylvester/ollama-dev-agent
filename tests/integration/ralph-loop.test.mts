@@ -1,7 +1,7 @@
 /**
  * Integration tests for the Ralph loop.
  * These tests require Ollama to be running at the configured OLLAMA_BASE_URL.
- * They are slower and make real model calls — run with: bun test tests/integration
+ * They are slower and make real model calls — run with: ODA_LIVE_TESTS=1 bun test tests/integration
  */
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -34,7 +34,8 @@ const simpleTask: Task = {
   iterationCount: 0,
 };
 
-describe('RalphLoop', () => {
+// Live model calls cost time and provider quota: opt in with ODA_LIVE_TESTS=1.
+describe.skipIf(!process.env['ODA_LIVE_TESTS'])('RalphLoop', () => {
   it(
     'completes a simple task',
     async () => {

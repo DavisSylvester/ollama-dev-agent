@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "bun --watch src/index.mts",
     "start": "bun src/index.mts",
-    "test": "bun test",
+    "test": "bun test tests",
     "test:unit": "bun test tests/unit",
     "test:coverage": "bun test --coverage tests/unit",
     "test:integration": "bun test tests/integration",
