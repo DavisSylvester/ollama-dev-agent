@@ -2,6 +2,7 @@ import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
 import { defineTool } from './define-tool.mts';
 import { execa } from 'execa';
+import { logger } from '../logger.mts';
 
 export interface LintResult {
   readonly clean: boolean;
@@ -23,6 +24,16 @@ const LINT_EXT = /\.(mts|tsx)$/;
 function isNoFilesMatched(output: string): boolean {
   return /No files matching the pattern/i.test(output);
 }
+
+// The target project has no ESLint config (ESLint 9 needs eslint.config.*).
+// That is a setup gap, not a code defect: failing the gate on it fails every
+// iteration of every task, so the reviewer never runs and nothing can ship.
+export function isMissingConfig(output: string): boolean {
+  return /couldn't find an eslint\.config|could not find config file|No ESLint configuration found/i.test(output);
+}
+
+// ESLint on a large tree can be slow, but it must never hang the loop.
+const LINT_TIMEOUT_MS = 180_000;
 
 /**
  * Run ESLint in `workingDirectory`.
@@ -59,12 +70,23 @@ export async function runLint(
       cwd: workingDirectory,
       reject: false,
       all: true,
+      timeout: LINT_TIMEOUT_MS,
+      windowsHide: true,
     });
 
     const output = proc.all ?? `${proc.stdout}\n${proc.stderr}`.trim();
 
+    if (proc.timedOut === true) {
+      return { clean: false, output: `ESLint timed out after ${LINT_TIMEOUT_MS / 1000}s.\n${output}`.trim() };
+    }
+
     if (isNoFilesMatched(output)) {
       return { clean: true, output: 'No lint-eligible files found.' };
+    }
+
+    if (isMissingConfig(output)) {
+      logger.warn({ workingDirectory }, 'lint.no_config: project has no ESLint config; lint gate skipped');
+      return { clean: true, output: 'Lint skipped: this project has no ESLint config (add eslint.config.mjs to enable the lint gate).' };
     }
 
     const outputText = output || 'No lint issues found.';

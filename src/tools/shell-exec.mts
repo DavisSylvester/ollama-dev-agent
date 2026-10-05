@@ -21,6 +21,14 @@ function isServerStartCommand(command: string): boolean {
   return SERVER_START_PATTERN.test(command);
 }
 
+const DEFAULT_TIMEOUT_MS = 60_000;
+const MAX_TIMEOUT_MS = 600_000;
+
+export function clampTimeout(timeoutMs: number | undefined): number {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return DEFAULT_TIMEOUT_MS;
+  return Math.min(timeoutMs, MAX_TIMEOUT_MS);
+}
+
 export function createShellExecTool(workingDirectory: string): StructuredTool {
   return defineTool(
     async ({
@@ -80,7 +88,9 @@ export function createShellExecTool(workingDirectory: string): StructuredTool {
         const proc = await execa(shell.path, shellArgv(shell, command), {
           cwd: workingDirectory,
           windowsHide: true,
-          timeout: timeout_ms ?? 60000,
+          // Clamp the model-chosen timeout: a huge or invalid value would let
+          // one command hang the worker for its whole iteration.
+          timeout: clampTimeout(timeout_ms),
           killSignal: 'SIGKILL', // hard-kill on timeout so children don't linger
           reject: false,
           all: false,

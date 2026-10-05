@@ -20,6 +20,13 @@ import { stampStarted, stampFinished } from './progress-board.mts';
 import type { AgentStateType } from './state.mts';
 import type { Task } from '../types/index.mts';
 import { blockingRootCauses, resolveSplitDependencies } from './task-graph.mts';
+import {
+  createTaskWorkspace,
+  mergeTaskWorkspace,
+  prepareIsolation,
+  removeTaskWorkspace,
+  type TaskWorkspace,
+} from './task-isolation.mts';
 
 export { blockingRootCauses, resolveSplitDependencies } from './task-graph.mts';
 
@@ -277,9 +284,12 @@ export async function runTaskNode(
 
   emitAgentEvent('phase_changed', { phase: 'executing_tasks' });
 
+  // Give each task of a parallel batch its own worktree (see task-isolation).
+  const workspaces = await isolateBatch(stampedReady, state.workingDirectory);
+
   // Run all ready tasks in parallel
   const results = await Promise.allSettled(
-    stampedReady.map((task) => runSingleTask(task, state, tasksWithProgress)),
+    stampedReady.map((task) => runSingleTask(task, state, tasksWithProgress, workspaces.get(task.id)?.dir)),
   );
 
   // Merge settled results back into the full task list
@@ -322,6 +332,28 @@ export async function runTaskNode(
         completedAt: finished.completedAt ?? null,
       });
     }
+  }
+
+  // --- Merge isolated work back (in batch order) ---
+  // Completed tasks' changes are applied to the real tree. A task whose
+  // changes no longer apply (a sibling edited the same lines) runs again on
+  // top of the merged tree; failed tasks' partial changes are discarded.
+  for (const task of stampedReady) {
+    const workspace = workspaces.get(task.id);
+    if (!workspace) continue;
+    const current = mergedTasks.find((t) => t.id === task.id);
+    if (current?.status === 'complete') {
+      const merged = await mergeTaskWorkspace(workspace);
+      if (merged.ok) {
+        logger.info({ taskId: task.id, filesChanged: merged.filesChanged }, 'isolation.merged');
+      } else {
+        const rerun = await handleMergeConflict(current, merged.error, state);
+        mergedTasks = mergedTasks.map((t) => (t.id === task.id ? rerun : t));
+        const idx = completedIds.indexOf(task.id);
+        if (idx >= 0) completedIds.splice(idx, 1);
+      }
+    }
+    await removeTaskWorkspace(workspace);
   }
 
   // --- Auto-split on failure (Phase 0.3) ---
@@ -390,10 +422,55 @@ export async function runTaskNode(
   };
 }
 
+// Re-runs allowed after a merge conflict before the task is failed.
+const MAX_ISOLATION_CONFLICTS = 2;
+
+async function isolateBatch(tasks: Task[], workingDirectory: string): Promise<Map<string, TaskWorkspace>> {
+  const workspaces = new Map<string, TaskWorkspace>();
+  if (tasks.length < 2 || !env.TASK_ISOLATION) return workspaces;
+  const base = await prepareIsolation(workingDirectory);
+  if (!base) return workspaces;
+  for (const task of tasks) {
+    try {
+      workspaces.set(task.id, await createTaskWorkspace(base, task.id));
+    } catch (err) {
+      // That task just runs in the shared tree, as before isolation existed.
+      logger.warn({ taskId: task.id, error: String(err) }, 'isolation.worktree_failed');
+    }
+  }
+  if (workspaces.size > 0) {
+    emitAgentEvent('batch_isolated', { taskIds: [...workspaces.keys()] });
+  }
+  return workspaces;
+}
+
+export async function handleMergeConflict(task: Task, error: string, state: AgentStateType): Promise<Task> {
+  const conflicts = (task.isolationConflicts ?? 0) + 1;
+  logger.warn({ taskId: task.id, conflicts, error }, 'isolation.merge_conflict');
+  const ctx = new ContextManager(state.workingDirectory, state.featureSlug);
+  await ctx.clearTaskComplete(task.id).catch(() => undefined);
+
+  if (conflicts > MAX_ISOLATION_CONFLICTS) {
+    const reason = `Its changes conflicted with parallel tasks ${conflicts} times: ${error}`;
+    emitAgentEvent('task_failed', {
+      taskId: task.id,
+      taskName: task.name,
+      iterations: task.iterationCount,
+      reason,
+      completedAt: task.completedAt ?? null,
+    });
+    return { ...task, status: 'failed', isolationConflicts: conflicts, failureReason: reason };
+  }
+
+  emitAgentEvent('task_merge_conflict', { taskId: task.id, taskName: task.name, error });
+  return { ...task, status: 'pending', isolationConflicts: conflicts, completedAt: null };
+}
+
 async function runSingleTask(
   task: Task,
   state: AgentStateType,
   currentTasks: Task[],
+  taskDirectory?: string,
 ): Promise<Task> {
   emitAgentEvent('task_started', {
     taskId: task.id,
@@ -403,13 +480,15 @@ async function runSingleTask(
     totalTasks: currentTasks.length,
   });
 
-  const workerTools = createWorkerTools(state.workingDirectory, env.BRAVE_API_KEY);
+  const workDir = taskDirectory ?? state.workingDirectory;
+  const workerTools = createWorkerTools(workDir, env.BRAVE_API_KEY);
 
   const ralph = createRalphLoop(
-    state.workingDirectory,
+    workDir,
     state.featureSlug,
     state.featureName,
     state.maxIterations,
+    state.workingDirectory,
   );
 
   let lastIterationCount = 0;

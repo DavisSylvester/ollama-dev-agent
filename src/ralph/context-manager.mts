@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readFile, readdir, access, appendFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, access, appendFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { constants } from 'node:fs';
 import { DateTime } from 'luxon';
@@ -140,6 +140,12 @@ export class ContextManager {
     const dir = this.taskDir(taskId);
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, '.complete'), DateTime.utc().toISO() ?? '', 'utf-8');
+  }
+
+  // Undo markTaskComplete, e.g. when a parallel task's changes could not be
+  // applied to the real tree and the task has to run again.
+  async clearTaskComplete(taskId: string): Promise<void> {
+    await rm(join(this.taskDir(taskId), '.complete'), { force: true });
   }
 
   async isTaskComplete(taskId: string): Promise<boolean> {

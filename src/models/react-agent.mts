@@ -69,6 +69,9 @@ const KEEP_RECENT_MESSAGES = 6;
 const TOOL_CALL_LIMITS: Record<string, number> = {
   list_directory: 5,
   read_file: 10,
+  // Real runs showed 24 greps in one iteration — searching instead of writing.
+  grep_search: 12,
+  glob_search: 8,
   run_linter: 5,
   run_tests: 5,
 };
@@ -275,6 +278,7 @@ export async function runReactAgent(
         toolResult = `Error executing tool "${toolName}": ${message}`;
         logger.warn({ step, toolName, error: message }, 'react_agent.tool_error');
       }
+      toolResult = capToolResult(toolResult);
       onToolResult?.(toolName, toolArgs, toolResult);
 
       // Store read_file results in cache for deduplication on future calls
@@ -320,6 +324,23 @@ export async function runReactAgent(
   return (
     `${REACT_TIMEOUT_SENTINEL} (${limit}) without a final answer. ` +
     `Tools attempted: ${uniqueTools.join(', ') || 'none'}.`
+  );
+}
+
+// One tool result may use at most this many characters of context. A lockfile,
+// a bundled file or a long install log would otherwise fill the window in one
+// step and force a lossy compaction (or overflow the model's context).
+export const MAX_TOOL_RESULT_CHARS = 24_000;
+
+/** Keep the head and tail of an oversized tool result (errors and test summaries print last). */
+export function capToolResult(result: string, max: number = MAX_TOOL_RESULT_CHARS): string {
+  if (result.length <= max) return result;
+  const head = Math.floor(max * 0.6);
+  const tail = max - head;
+  const omitted = result.length - head - tail;
+  return (
+    `${result.slice(0, head)}\n\n[... ${omitted} characters omitted by oda to save context. ` +
+    `For a large file, use grep_search to find the part you need ...]\n\n${result.slice(-tail)}`
   );
 }
 

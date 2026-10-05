@@ -370,3 +370,20 @@ describe('runReactAgent — runaway thinking', () => {
     expect(retry[2]?.content).toBe(ACT_NOW_NUDGE);
   });
 });
+
+describe('capToolResult', () => {
+  it('leaves short results alone', async () => {
+    const { capToolResult } = await import('../../../src/models/react-agent.mts');
+    expect(capToolResult('short', 100)).toBe('short');
+  });
+
+  it('keeps the head and tail of an oversized result and says how much was dropped', async () => {
+    const { capToolResult } = await import('../../../src/models/react-agent.mts');
+    const big = `HEAD${'x'.repeat(1000)}TAIL`;
+    const capped = capToolResult(big, 100);
+    expect(capped.startsWith('HEAD')).toBe(true);
+    expect(capped.endsWith('TAIL')).toBe(true);
+    expect(capped).toContain('characters omitted by oda');
+    expect(capped.length).toBeLessThan(big.length);
+  });
+});

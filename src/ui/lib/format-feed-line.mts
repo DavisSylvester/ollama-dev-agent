@@ -65,6 +65,10 @@ export function formatFeedLine(type: string, payload: Record<string, unknown>): 
       return `✗ ${String(payload['taskId'])} failed — ${truncate(String(payload['reason'] ?? ''), 110)}`;
     case 'task_split':
       return `✂ ${String(payload['taskId'])} split into ${String(payload['count'])} smaller tasks`;
+    case 'batch_isolated':
+      return `⑂ ${(payload['taskIds'] as string[] | undefined)?.join(', ') ?? ''} each run in their own worktree`;
+    case 'task_merge_conflict':
+      return `⚠ ${String(payload['taskId'])} changes conflicted with a parallel task — running it again`;
     case 'reviewer_decision': {
       const decision = payload['decision'] as { decision?: string; issues?: unknown[] } | undefined;
       const issues = decision?.issues?.length ?? 0;

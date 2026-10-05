@@ -183,3 +183,50 @@ describe('parseReviewDecision — final decision wins', () => {
     expect(parseReviewDecision('**DECISION: SHIP**').decision).toBe('ship');
   });
 });
+
+// ---------------------------------------------------------------------------
+// loadReviewFiles — which files are embedded in the review
+// ---------------------------------------------------------------------------
+
+describe('loadReviewFiles', () => {
+  const setup = async (): Promise<string> => {
+    const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'review-files-'));
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src', 'a.mts'), 'export const a: number = 1;\n');
+    await writeFile(join(dir, 'src', 'big.mts'), 'x'.repeat(40_000));
+    return dir;
+  };
+
+  it('loads changed files first, including absolute paths inside the working directory', async () => {
+    const { loadReviewFiles } = await import('../../../src/ralph/reviewer.mts');
+    const { join } = await import('node:path');
+    const dir = await setup();
+    const files = await loadReviewFiles([join(dir, 'src', 'a.mts')], '', dir);
+    expect(files.map((f) => f.path)).toEqual(['src/a.mts']);
+    expect(files[0]?.content).toContain('export const a');
+  });
+
+  it('skips paths outside the working directory and missing files', async () => {
+    const { loadReviewFiles } = await import('../../../src/ralph/reviewer.mts');
+    const dir = await setup();
+    const files = await loadReviewFiles(['../outside.mts', 'src/missing.mts', 'src/a.mts'], '', dir);
+    expect(files.map((f) => f.path)).toEqual(['src/a.mts']);
+  });
+
+  it('marks a cut-off file so the reviewer does not treat it as incomplete', async () => {
+    const { loadReviewFiles, REVIEW_TRUNCATION_MARKER } = await import('../../../src/ralph/reviewer.mts');
+    const dir = await setup();
+    const files = await loadReviewFiles(['src/big.mts'], '', dir);
+    expect(files[0]?.content.endsWith(REVIEW_TRUNCATION_MARKER)).toBe(true);
+  });
+
+  it('does not load the same file twice when the summary repeats it', async () => {
+    const { loadReviewFiles } = await import('../../../src/ralph/reviewer.mts');
+    const dir = await setup();
+    const files = await loadReviewFiles(['src/a.mts'], 'Wrote `src/a.mts`', dir);
+    expect(files).toHaveLength(1);
+  });
+});

@@ -60,7 +60,7 @@ interface RunSummary {
 const FEED_EVENTS: readonly string[] = [
   'sizing_started', 'task_sized', 'debate_started', 'persona_stance', 'debate_decided',
   'task_started', 'iteration_finished', 'model_retry', 'quota_paused', 'dependencies_checked',
-  'task_complete', 'task_failed', 'task_split', 'reviewer_decision',
+  'task_complete', 'task_failed', 'task_split', 'reviewer_decision', 'batch_isolated', 'task_merge_conflict',
 ];
 
 // What the status bar says the agent is doing after each event.

@@ -645,6 +645,8 @@ ${filesSection}
 
 - Do NOT flag missing features. If the task spec does not require Angular, do not demand it. If there is no CSS in the implementation, check 4 does not apply. If there are no HTTP client calls, check 5 does not apply. If there is no frontend, checks 6 and 9 do not apply. If there is no HTTP server, checks 7 and 8 do not apply. Each item in check 10 applies only when that construct appears in the code.
 - Before listing any issue, confirm: "This violation **is present** in the code embedded above."
+- A file ending in \`[truncated by oda for length — not a defect in the file]\` was cut off by oda to fit your context. The rest of the file exists. Never flag a truncated file as incomplete, and never REVISE over code you cannot see.${fileContents.length === 0 ? `
+- **No implementation files could be embedded for this review.** Judge from the worker's report and test results. Do not REVISE only because files are missing from this prompt.` : ''}
 - Do not invent requirements beyond what is in the Description and Acceptance Criteria. The absence of a feature is NOT a violation unless the spec explicitly requires it.
 
 ## Your Job
@@ -659,7 +661,7 @@ ${filesSection}
    - No implicit \`any\` from missing types
    - Any method exceeding 50 lines — flag it and request extraction into a private helper
    - Do **NOT** REVISE over dependency versions in \`package.json\` — oda upgrades and pins them itself before each batch and records why in \`docs/DEPENDENCIES.md\`.${dependencySummary ? ` ${dependencySummary}` : ''}
-   - **REVISE immediately** if any filename uses camelCase or PascalCase (e.g., \`addCard.mts\`, \`AddCard.mts\`) — all filenames must be kebab-case (e.g., \`add-card.mts\`)
+   - **REVISE immediately** if any filename uses camelCase or PascalCase (e.g., \`addCard.mts\`, \`AddCard.mts\`) — all filenames must be kebab-case (e.g., \`add-card.mts\`). An \`i-\` prefix on an interface file (\`i-photo.mts\`, \`i-photo-repository.mts\`) **is** kebab-case and is the required convention — never flag it
 4. Check for CSS & styling violations — **REVISE immediately if any of these appear**:
    - Inline styles (\`style={{ }}\` or \`style="..."\`) — must move to a \`.css\` or \`.scss\` file
    - \`position: absolute\` or \`float:\` used for layout instead of flexbox
@@ -685,9 +687,7 @@ ${filesSection}
    - \`export default\` — must be a named export
    - A health route or probe at \`/healthz\` or \`/readyz\` — must be \`/health\` and \`/ready\`
    - A router or service querying the database directly instead of going through a repository
-   - A service or repository created with \`new\` inside another service or a router instead of being resolved through DI
-   - \`mongodb\` pinned below v7 or \`mongodb-memory-server\` below v11 in a \`package.json\` shown above
-11. Check for correctness: logic errors, edge cases not handled, missing error handling
+   - A service or repository created with \`new\` inside another service or a router instead of being resolved through DI11. Check for correctness: logic errors, edge cases not handled, missing error handling
 12. Trust the worker's test results — you cannot run them
 
 ## Pre-Completion Checklist (REQUIRED before DECISION)

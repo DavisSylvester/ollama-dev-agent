@@ -5,7 +5,7 @@ import { buildReviewerPrompt } from '../prd/index.mts';
 import { getDependencyReport, summarizeForPrompt } from '../deps/dependency-preflight.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
-import { join } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 
 interface ReviewerParams {
   readonly task: Task;
@@ -13,6 +13,10 @@ interface ReviewerParams {
   readonly featureSlug: string;
   readonly workingDirectory: string;
   readonly workerOutput: string;
+  // Files the worker wrote or edited this iteration (from its tool calls).
+  // Loaded first: they are exactly what changed, unlike paths guessed from
+  // the worker's prose summary.
+  readonly changedFiles?: readonly string[];
 }
 
 const MAX_REVIEWER_DECISION_RETRIES = 2;
@@ -99,10 +103,10 @@ async function invokeReviewerWithRetry(
 }
 
 export async function runReviewer(params: ReviewerParams): Promise<ReviewDecision> {
-  const { task, featureName, workerOutput, workingDirectory } = params;
+  const { task, featureName, workerOutput, workingDirectory, changedFiles = [] } = params;
 
   // Pre-load the files the worker created so the reviewer doesn't need tools
-  const fileContents = await loadMentionedFiles(workerOutput, workingDirectory);
+  const fileContents = await loadReviewFiles(changedFiles, workerOutput, workingDirectory);
   const dependencySummary = summarizeForPrompt(getDependencyReport(workingDirectory));
 
   const systemPrompt = buildReviewerPrompt(
@@ -143,24 +147,41 @@ interface LoadedFile {
   readonly content: string;
 }
 
-async function loadMentionedFiles(
+const MAX_REVIEW_FILES = 10;
+const MAX_REVIEW_FILE_CHARS = 16_000;
+// Total cap across all files so the reviewer prompt fits the context window.
+const MAX_REVIEW_TOTAL_CHARS = 80_000;
+
+// Marker the reviewer prompt explains: a cut-off file is not a code defect.
+export const REVIEW_TRUNCATION_MARKER = '... [truncated by oda for length — not a defect in the file]';
+
+/**
+ * The files to embed in the review: the worker's changed files first (exact),
+ * then paths mentioned in its summary. Paths may be relative or absolute;
+ * anything outside the working directory or missing is skipped.
+ */
+export async function loadReviewFiles(
+  changedFiles: readonly string[],
   workerOutput: string,
   workingDirectory: string,
 ): Promise<LoadedFile[]> {
-  const paths = extractFilePaths(workerOutput);
-  const MAX_FILES = 6;
-  const MAX_FILE_BYTES = 8000;
-
+  const candidates = [...changedFiles, ...extractFilePaths(workerOutput)];
+  const seen = new Set<string>();
   const results: LoadedFile[] = [];
+  let total = 0;
 
-  for (const relativePath of paths.slice(0, MAX_FILES)) {
-    const absolutePath = join(workingDirectory, relativePath);
+  for (const candidate of candidates) {
+    if (results.length >= MAX_REVIEW_FILES || total >= MAX_REVIEW_TOTAL_CHARS) break;
+    const absolutePath = resolve(workingDirectory, candidate);
+    const rel = relative(workingDirectory, absolutePath);
+    if (rel.startsWith('..') || isAbsolute(rel) || seen.has(absolutePath)) continue;
+    seen.add(absolutePath);
     try {
       const raw = await Bun.file(absolutePath).text();
-      const content = raw.length > MAX_FILE_BYTES
-        ? raw.slice(0, MAX_FILE_BYTES) + '\n... [truncated]'
-        : raw;
-      results.push({ path: relativePath, content });
+      const budget = Math.min(MAX_REVIEW_FILE_CHARS, MAX_REVIEW_TOTAL_CHARS - total);
+      const content = raw.length > budget ? `${raw.slice(0, budget)}\n${REVIEW_TRUNCATION_MARKER}` : raw;
+      total += content.length;
+      results.push({ path: rel.replace(/\\/g, '/'), content });
     } catch {
       // File may not exist or path extraction was wrong — skip silently
     }

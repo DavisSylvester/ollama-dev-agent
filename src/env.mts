@@ -1,13 +1,55 @@
 import { z } from 'zod';
-import { config as loadDotenv } from 'dotenv';
+import { parse as parseDotenv } from 'dotenv';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+function readEnvFile(path: string): Record<string, string> {
+  try {
+    return parseDotenv(readFileSync(path, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Which of ODA's own .env values to put into the environment.
+ *
+ * Precedence: a variable set in the real environment (the shell, a test
+ * preload) > ODA's .env > a .env Bun auto-loaded from the invocation directory.
+ * Bun copies the cwd's .env into process.env before any code runs, so a value
+ * that matches the cwd .env is treated as auto-loaded, not as a real setting.
+ * CLI flags still win over all of these (applyEnvOverrides runs afterwards).
+ */
+export function selectOdaEnv(
+  odaVars: Readonly<Record<string, string>>,
+  cwdVars: Readonly<Record<string, string>>,
+  current: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
+  const selected: Record<string, string> = {};
+  for (const [key, value] of Object.entries(odaVars)) {
+    const now = current[key];
+    const fromCwdFile = key in cwdVars && cwdVars[key] === now;
+    if (now === undefined || fromCwdFile) selected[key] = value;
+  }
+  return selected;
+}
 
 // Load THIS package's .env regardless of the process cwd. Without this, the
 // global `oda` command run from another directory falls back to schema defaults
 // (local ollama + qwen3-coder/devstral), ignoring the configured cloud models.
-// override:true so ODA's own config wins over a stray .env in the invocation dir.
-// CLI flags still take precedence — they are applied after via applyEnvOverrides.
-loadDotenv({ path: join(import.meta.dir, '..', '.env'), override: true });
+function loadOdaEnvFile(): void {
+  const cwd = process.cwd();
+  const nodeEnv = process.env['NODE_ENV'];
+  const cwdVars = {
+    ...readEnvFile(join(cwd, '.env')),
+    ...(nodeEnv ? readEnvFile(join(cwd, `.env.${nodeEnv}`)) : {}),
+    ...readEnvFile(join(cwd, '.env.local')),
+  };
+  const selected = selectOdaEnv(readEnvFile(join(import.meta.dir, '..', '.env')), cwdVars, process.env);
+  Object.assign(process.env, selected);
+}
+
+loadOdaEnvFile();
 
 const envSchema = z.object({
   OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),
@@ -42,6 +84,13 @@ const envSchema = z.object({
   // newest release, keeping only upgrades that don't make the gate worse.
   // Only the literal "false" / "0" turns it off.
   DEP_UPGRADE: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
+  // Run each task of a parallel batch in its own git worktree, so a task's
+  // tests never see a sibling's half-written files. Only "false" / "0" turns
+  // it off. Has no effect outside a git repo or for a batch of one task.
+  TASK_ISOLATION: z
     .string()
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),

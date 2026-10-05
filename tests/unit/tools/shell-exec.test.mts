@@ -49,3 +49,14 @@ describe('shell_exec server-start guard (Phase 1.2)', () => {
     expect(t.stderr).not.toContain('Refused');
   });
 });
+
+describe('clampTimeout', () => {
+  it('defaults missing or invalid timeouts to 60s and caps huge ones at 10 minutes', async () => {
+    const { clampTimeout } = await import('../../../src/tools/shell-exec.mts');
+    expect(clampTimeout(undefined)).toBe(60_000);
+    expect(clampTimeout(0)).toBe(60_000);
+    expect(clampTimeout(Number.NaN)).toBe(60_000);
+    expect(clampTimeout(5_000)).toBe(5_000);
+    expect(clampTimeout(86_400_000)).toBe(600_000);
+  });
+});
