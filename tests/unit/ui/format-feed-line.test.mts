@@ -34,6 +34,11 @@ describe('formatFeedLine — execution feedback', () => {
       .toBe('⟳ model call failed (Model call timed out after 180s) — retry 2/3 in 4s');
   });
 
+  it('describes a retry after runaway thinking', () => {
+    expect(formatFeedLine('model_retry', { error: 'Model thought for ~8k tokens without acting', attempt: 1, maxRetries: 3, delayMs: 2000 }))
+      .toBe('⟳ Model thought for ~8k tokens without acting — retry 1/3 in 2s, told to act');
+  });
+
   it('describes each attempt outcome', () => {
     expect(formatFeedLine('iteration_finished', { taskId: 'TASK-003-2', iteration: 2, maxIterations: 5, outcome: 'worker_error', detail: 'Worker encountered an unexpected error: Model call timed out after 180s' }))
       .toBe('  TASK-003-2 attempt 2/5: model call failed — Model call timed out after 180s');

@@ -76,6 +76,8 @@ function activityLabel(type: string, payload: Record<string, unknown>): string |
       return `${String(payload['taskId'])}: reviewing`;
     case 'model_retry':
       return `model call failed — retry ${String(payload['attempt'])}/${String(payload['maxRetries'])}`;
+    case 'model_progress':
+      return modelProgressLabel(payload);
     case 'quota_paused':
       return `paused: model quota reached (${String(payload['waitMinutes'])} min)`;
     case 'task_started':
@@ -87,9 +89,23 @@ function activityLabel(type: string, payload: Record<string, unknown>): string |
   }
 }
 
+// A running model call: whether it is still waiting, thinking or writing.
+export function modelProgressLabel(payload: Record<string, unknown>): string {
+  const who = String(payload['label'] ?? '').startsWith('reviewer') ? 'reviewer' : 'worker';
+  const k = (tokens: unknown): string => `${(Number(tokens ?? 0) / 1000).toFixed(1)}k`;
+  switch (payload['phase']) {
+    case 'thinking':
+      return `${who} model thinking… ~${k(payload['thinkingTokens'])} tokens`;
+    case 'writing':
+      return `${who} model writing… ~${k(payload['outputTokens'])} tokens`;
+    default:
+      return `${who} model: waiting for the first response`;
+  }
+}
+
 const ACTIVITY_EVENTS: readonly string[] = [
   'iteration_started', 'tool_called', 'tool_result', 'lint_complete', 'model_retry',
-  'quota_paused', 'task_started', 'dependencies_checked',
+  'quota_paused', 'task_started', 'dependencies_checked', 'model_progress',
 ];
 
 // Lines of command output shown per task, and how many tasks to show.
@@ -321,7 +337,9 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
       const e = event as { type: string; payload: Record<string, unknown> };
       const label = activityLabel(e.type, e.payload);
       if (label === null) return;
-      setState((prev) => ({ ...prev, activity: { label, since: Date.now() } }));
+      // Progress updates of one call keep its timer running instead of resetting it.
+      const elapsed = e.type === 'model_progress' ? Number(e.payload['elapsedSeconds'] ?? 0) * 1000 : 0;
+      setState((prev) => ({ ...prev, activity: { label, since: Date.now() - elapsed } }));
     };
 
     const handleError = (event: unknown): void => {

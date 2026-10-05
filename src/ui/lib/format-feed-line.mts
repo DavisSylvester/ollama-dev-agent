@@ -47,7 +47,10 @@ export function formatFeedLine(type: string, payload: Record<string, unknown>): 
     }
     case 'model_retry': {
       const seconds = Math.round(Number(payload['delayMs'] ?? 0) / 1000);
-      return `⟳ model call failed (${truncate(String(payload['error'] ?? ''), 60)}) — retry ${String(payload['attempt'])}/${String(payload['maxRetries'])} in ${seconds}s`;
+      const error = String(payload['error'] ?? '');
+      const retry = `retry ${String(payload['attempt'])}/${String(payload['maxRetries'])} in ${seconds}s`;
+      if (error.startsWith('Model thought for')) return `⟳ ${error} — ${retry}, told to act`;
+      return `⟳ model call failed (${truncate(error, 60)}) — ${retry}`;
     }
     case 'quota_paused':
       return `⏸ model quota reached — pausing ${String(payload['waitMinutes'])} min, then retrying ${(payload['taskIds'] as string[] | undefined)?.join(', ') ?? ''}`;

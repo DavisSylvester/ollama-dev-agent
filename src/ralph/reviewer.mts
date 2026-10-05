@@ -1,5 +1,5 @@
 import type { Task, ReviewDecision, ChecklistItem } from '../types/index.mts';
-import { abortModelRequests, createChatModel, withOllamaRetry } from '../models/index.mts';
+import { createChatModel, ThinkingBudgetExceededError, watchModel, withOllamaRetry } from '../models/index.mts';
 import { SystemMessage, HumanMessage, type AIMessage } from '@langchain/core/messages';
 import { buildReviewerPrompt } from '../prd/index.mts';
 import { getDependencyReport, summarizeForPrompt } from '../deps/dependency-preflight.mts';
@@ -39,6 +39,22 @@ function hasDecision(response: string): boolean {
   return finalDecision(response) !== null;
 }
 
+// After a review the model spent thinking without writing anything, ask for
+// the verdict directly instead of repeating the same request.
+export function withReviewNudge(
+  messages: readonly (SystemMessage | HumanMessage)[],
+  lastError: unknown,
+): (SystemMessage | HumanMessage)[] {
+  if (!(lastError instanceof ThinkingBudgetExceededError)) return [...messages];
+  return [
+    ...messages,
+    new HumanMessage(
+      'You spent too long deliberating. Check the acceptance criteria against the work ' +
+      'as it stands and write your review and DECISION line now.',
+    ),
+  ];
+}
+
 async function invokeReviewerWithRetry(
   model: ReturnType<typeof createChatModel>,
   systemPrompt: string,
@@ -51,8 +67,8 @@ async function invokeReviewerWithRetry(
   ];
 
   const firstMessage = (await withOllamaRetry(
-    () => model.invoke(baseMessages),
-    { label: 'reviewer.invoke', onCallTimeout: () => abortModelRequests(model) },
+    ({ lastError }) => model.invoke(withReviewNudge(baseMessages, lastError)),
+    { label: 'reviewer.invoke', ...watchModel(model) },
   )) as AIMessage;
   let response = extractContent(firstMessage);
 
@@ -74,7 +90,7 @@ async function invokeReviewerWithRetry(
             'Provide your complete review and decision now.',
           ),
         ]),
-      { label: 'reviewer.invoke', onCallTimeout: () => abortModelRequests(model) },
+      { label: 'reviewer.invoke', ...watchModel(model) },
     )) as AIMessage;
     response = extractContent(retryMessage);
   }

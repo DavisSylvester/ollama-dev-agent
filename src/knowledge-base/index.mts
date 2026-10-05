@@ -143,37 +143,63 @@ function isProvenSolution(entry: KBEntry): boolean {
   return (entry.metadata.status ?? '').toLowerCase() === 'resolved';
 }
 
+// Longest single lesson fed to the worker; longer ones are cut with an ellipsis.
+const MAX_LESSON_CHARS = 600;
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
+}
+
 function renderEntries(entries: KBEntry[], cap: number): string[] {
   return entries.slice(-cap).map((e) => {
     const model = e.model ? ` _(model: ${e.model})_` : '';
     // Feed the GENERALIZED lesson — it transfers across projects. Fall back to
     // the actual resolution if a generalized one isn't present.
     const lesson = e.generalized_resolution || e.actual_resolution || 'unresolved';
-    return `- **Situation**: ${e.issue}\n  **Lesson**: ${lesson}${model}`;
+    return `- **Situation**: ${clip(e.issue, 200)}\n  **Lesson**: ${clip(lesson, MAX_LESSON_CHARS)}${model}`;
   });
+}
+
+// Keep the leading lines that fit in `budget` characters (newlines included).
+function takeWithin(lines: string[], budget: number): string[] {
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    if (used + line.length + 1 > budget) break;
+    kept.push(line);
+    used += line.length + 1;
+  }
+  return kept;
 }
 
 // Build the prompt section fed to the worker each iteration. The task's own
 // category comes first (most relevant), then any other categories with entries.
 // Within each category, proven solutions are surfaced separately from pitfalls.
-export function formatForPrompt(kb: KnowledgeBase, primary: KBCategory): string {
+export function formatForPrompt(kb: KnowledgeBase, primary: KBCategory, maxChars: number = 8000): string {
   const ordered: KBCategory[] = [primary, ...CATEGORIES.filter((c) => c !== primary)];
 
   const provenSections: string[] = [];
   const pitfallSections: string[] = [];
+  // Everything in the prompt costs the model reading (and deliberating) time.
+  // The task's own category is filled first, proven solutions before pitfalls,
+  // until the budget runs out.
+  let remaining = maxChars;
 
   for (const category of ordered) {
     const entries = kb[category];
     if (!entries || entries.length === 0) continue;
 
-    const proven = entries.filter(isProvenSolution);
-    const pitfalls = entries.filter((e) => !isProvenSolution(e));
-
-    if (proven.length > 0) {
-      provenSections.push(`### ${category.toUpperCase()}\n${renderEntries(proven, 5).join('\n')}`);
-    }
-    if (pitfalls.length > 0) {
-      pitfallSections.push(`### ${category.toUpperCase()}\n${renderEntries(pitfalls, 8).join('\n')}`);
+    const groups: [KBEntry[], number, string[]][] = [
+      [entries.filter(isProvenSolution), 5, provenSections],
+      [entries.filter((e) => !isProvenSolution(e)), 8, pitfallSections],
+    ];
+    for (const [group, cap, sections] of groups) {
+      const header = `### ${category.toUpperCase()}`;
+      const lines = takeWithin(renderEntries(group, cap), remaining - header.length - 2);
+      if (lines.length === 0) continue;
+      const section = `${header}\n${lines.join('\n')}`;
+      sections.push(section);
+      remaining -= section.length + 2;
     }
   }
 

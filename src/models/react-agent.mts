@@ -7,7 +7,7 @@ import {
   type AIMessage,
 } from '@langchain/core/messages';
 import { ChatOllama } from '@langchain/ollama';
-import { abortModelRequests, DeadlineExceededError, withOllamaRetry } from './ollama-client.mts';
+import { DeadlineExceededError, ThinkingBudgetExceededError, watchModel, withOllamaRetry } from './ollama-client.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 import { DateTime } from 'luxon';
@@ -21,23 +21,33 @@ import { DateTime } from 'luxon';
 // deadline; a timed-out request is cancelled at the HTTP level.
 // ---------------------------------------------------------------------------
 
+// Added to the retry of a call the model spent thinking without acting, so the
+// next attempt doesn't plan the whole task in its head again.
+export const ACT_NOW_NUDGE =
+  'You spent too long planning without acting. Do not plan the whole task up front. ' +
+  'Make your next tool call now: record a short plan with todo_write, or read or ' +
+  'write the first file. Work out the details step by step as you go.';
+
 async function invokeWithRetry(
   model: BaseChatModel,
   baseModel: BaseChatModel,
-  messages: Parameters<BaseChatModel['invoke']>[0],
+  messages: ConvMessage[],
   deadlineMs: number,
   label: string = 'worker.invoke',
   maxRetries?: number,
 ): Promise<AIMessage> {
   return withOllamaRetry(
-    async () => (await model.invoke(messages)) as AIMessage,
+    async ({ lastError }) => {
+      const input = lastError instanceof ThinkingBudgetExceededError
+        ? [...messages, new HumanMessage(ACT_NOW_NUDGE)]
+        : messages;
+      return (await model.invoke(input)) as AIMessage;
+    },
     {
       label,
       deadlineMs,
       ...(maxRetries !== undefined ? { maxRetries } : {}),
-      onCallTimeout: () => {
-        if (baseModel instanceof ChatOllama) abortModelRequests(baseModel);
-      },
+      ...(baseModel instanceof ChatOllama ? watchModel(baseModel) : {}),
     },
   );
 }
