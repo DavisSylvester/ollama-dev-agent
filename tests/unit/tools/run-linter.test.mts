@@ -164,3 +164,24 @@ describe('runLint', () => {
     expect(result.output).toContain('some output');
   });
 });
+
+describe('runLint — project without an ESLint config', () => {
+  it('treats a missing eslint.config as clean so the gate does not fail every iteration', async () => {
+    execaImpl = async () => ({
+      exitCode: 2,
+      all: 'ESLint: 9.30.0\n\nESLint couldn\'t find an eslint.config.(js|mjs|cjs) file.',
+      stdout: '',
+      stderr: '',
+    });
+    const result = await runLint('/some/dir', false, ['src/a.mts']);
+    expect(result.clean).toBe(true);
+    expect(result.output).toContain('no ESLint config');
+  });
+
+  it('reports a lint run that timed out as not clean', async () => {
+    execaImpl = async () => ({ exitCode: 1, all: '', stdout: '', stderr: '', timedOut: true }) as Awaited<ReturnType<typeof execaImpl>>;
+    const result = await runLint('/some/dir', false, ['src/a.mts']);
+    expect(result.clean).toBe(false);
+    expect(result.output).toContain('timed out');
+  });
+});
