@@ -1,37 +1,22 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { RalphLoop as RealRalphLoop } from '../../../src/ralph/loop.mts';
 import { QuotaExceededError } from '../../../src/models/ollama-client.mts';
 import { env } from '../../../src/env.mts';
+import {
+  runTaskNode,
+  QuotaPauseExceededError,
+  setQuotaSleepForTests,
+  resetQuotaPauseForTests,
+  setRalphLoopFactoryForTests,
+} from '../../../src/agent/graph.mts';
 import type { AgentStateType } from '../../../src/agent/state.mts';
 import type { Task } from '../../../src/types/index.mts';
 
-// What the stubbed RalphLoop.runTask does while a test in this file is active.
-// `null` means "behave like the real loop", so other test files that run in the
-// same process are unaffected by this module mock.
+// What the stubbed RalphLoop.runTask does in each test. Injected through the
+// graph's factory hook — a module mock would leak into other test files.
 type Behaviour = (task: Task) => Promise<'complete' | 'failed'>;
-const control: { behaviour: Behaviour | null } = { behaviour: null };
-
-mock.module('../../../src/ralph/index.mts', () => {
-  class StubRalphLoop extends RealRalphLoop {
-
-    public override async runTask(...args: Parameters<RealRalphLoop['runTask']>): ReturnType<RealRalphLoop['runTask']> {
-      if (control.behaviour) return control.behaviour(args[0]);
-      return super.runTask(...args);
-    }
-  }
-  return {
-    RalphLoop: StubRalphLoop,
-    runWorker: async (): Promise<string> => '',
-    runReviewer: async (): Promise<never> => { throw new Error('not used'); },
-    ContextManager: class {},
-  };
-});
-
-const { runTaskNode, QuotaPauseExceededError, setQuotaSleepForTests, resetQuotaPauseForTests } = await import(
-  '../../../src/agent/graph.mts'
-);
+const control: { behaviour: Behaviour } = { behaviour: async () => 'complete' };
 
 const SLUG = 'quota-test';
 const sleeps: number[] = [];
@@ -56,6 +41,7 @@ function state(tasks: Task[]): AgentStateType {
 
 beforeEach(() => {
   sleeps.length = 0;
+  setRalphLoopFactoryForTests(() => ({ runTask: (task) => control.behaviour(task) }));
   resetQuotaPauseForTests();
   setQuotaSleepForTests(async (ms) => { sleeps.push(ms); });
   const target = env as Record<string, unknown>;
@@ -64,7 +50,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  control.behaviour = null;
+  control.behaviour = async () => 'complete';
+  setRalphLoopFactoryForTests(null);
   await rm(join('feature-results', SLUG), { recursive: true, force: true });
 });
 

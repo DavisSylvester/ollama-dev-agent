@@ -17,8 +17,16 @@ let execaImpl: (file: string, args: readonly string[]) => Promise<{
   stderr: string;
 }>;
 
+// The real execa, captured before mocking. Bun's mock.module is process-wide
+// and can't be undone, so outside this file's tests the mock must delegate to
+// the real implementation — otherwise later test files that really run
+// commands (e.g. shell_exec) get this file's fakes.
+const realExeca = (await import('execa')).execa;
+let mockActive = false;
+
 mock.module('execa', () => ({
-  execa: async (file: string, args: readonly string[]) => {
+  execa: async (file: string, args: readonly string[], options?: Record<string, unknown>) => {
+    if (!mockActive) return realExeca(file, [...args], options);
     execaCalls.push({ file, args });
     return execaImpl(file, args);
   },
@@ -28,11 +36,13 @@ mock.module('execa', () => ({
 const { runLint } = await import('../../../src/tools/run-linter.mts');
 
 beforeEach(() => {
+  mockActive = true;
   execaCalls = [];
   execaImpl = async () => ({ exitCode: 0, all: 'No lint issues found.', stdout: '', stderr: '' });
 });
 
 afterEach(() => {
+  mockActive = false;
   mock.restore();
 });
 

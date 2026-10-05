@@ -53,6 +53,15 @@ export function resetQuotaPauseForTests(): void {
   quotaPauseStartedAt = null;
 }
 
+// Overridable RalphLoop construction so scheduler tests can stub a task run
+// without a process-wide module mock (which leaks into other test files).
+type RalphLoopFactory = (...args: ConstructorParameters<typeof RalphLoop>) => Pick<RalphLoop, 'runTask'>;
+const defaultRalphLoopFactory: RalphLoopFactory = (...args) => new RalphLoop(...args);
+let createRalphLoop: RalphLoopFactory = defaultRalphLoopFactory;
+export function setRalphLoopFactoryForTests(factory: RalphLoopFactory | null): void {
+  createRalphLoop = factory ?? defaultRalphLoopFactory;
+}
+
 /**
  * Wait out a quota/rate-limit rejection. The affected tasks were already put
  * back to pending and the run state saved; after the pause the scheduler
@@ -382,7 +391,7 @@ async function runSingleTask(
 
   const workerTools = createWorkerTools(state.workingDirectory, env.BRAVE_API_KEY);
 
-  const ralph = new RalphLoop(
+  const ralph = createRalphLoop(
     state.workingDirectory,
     state.featureSlug,
     state.featureName,
