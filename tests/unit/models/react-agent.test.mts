@@ -2,7 +2,8 @@ import { describe, it, expect } from 'bun:test';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { StructuredTool } from '@langchain/core/tools';
 import { AIMessage, SystemMessage, HumanMessage } from '@langchain/core/messages';
-import { runReactAgent, REACT_TIMEOUT_SENTINEL } from '../../../src/models/react-agent.mts';
+import { runReactAgent, REACT_TIMEOUT_SENTINEL, ACT_NOW_NUDGE } from '../../../src/models/react-agent.mts';
+import { ThinkingBudgetExceededError } from '../../../src/models/ollama-client.mts';
 
 // ---------------------------------------------------------------------------
 // Mock factories
@@ -341,3 +342,31 @@ describe('runReactAgent — budget warnings', () => {
 // Ensure unused imports don't cause lint errors — these are needed by makeModel
 void SystemMessage;
 void HumanMessage;
+
+// ---------------------------------------------------------------------------
+// Runaway thinking
+// ---------------------------------------------------------------------------
+
+describe('runReactAgent — runaway thinking', () => {
+  it('retries with a nudge to act after the thinking budget is exceeded', async () => {
+    const seen: unknown[][] = [];
+    let calls = 0;
+    const model = {
+      bindTools(_tools: StructuredTool[]) {
+        return model;
+      },
+      async invoke(messages: unknown[]) {
+        seen.push([...messages]);
+        calls++;
+        if (calls === 1) throw new ThinkingBudgetExceededError(9000);
+        return new AIMessage({ content: 'Done.' });
+      },
+    };
+    const result = await runReactAgent(model as unknown as BaseChatModel, [], SYSTEM, USER, 5);
+    expect(result).toBe('Done.');
+    expect(seen[0]).toHaveLength(2);
+    const retry = seen[1] as HumanMessage[];
+    expect(retry).toHaveLength(3);
+    expect(retry[2]?.content).toBe(ACT_NOW_NUDGE);
+  });
+});

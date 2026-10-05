@@ -3,6 +3,16 @@ import { Ollama, type Fetch } from 'ollama';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 import { emitAgentEvent } from '../agent/events.mts';
+import {
+  checkProgress,
+  hasActed,
+  monitorBody,
+  newProgress,
+  outputTokens,
+  thinkingTokens,
+  type CallProgress,
+  type StallLimits,
+} from './stream-monitor.mts';
 
 // Bearer auth header for Ollama Cloud. Returns undefined for local Ollama
 // (no key set) so behavior is unchanged when running locally.
@@ -123,6 +133,30 @@ export class ModelCallTimeoutError extends Error {
 }
 
 /**
+ * Thrown when a streamed call sends no data for IDLE_TIMEOUT_SECONDS — the
+ * connection has stalled, as opposed to a model that is still working.
+ */
+export class ModelStreamStalledError extends Error {
+
+  public constructor(public readonly idleMs: number) {
+    super(`Model stream stalled: no data for ${Math.round(idleMs / 1000)}s`);
+    this.name = "ModelStreamStalledError";
+  }
+}
+
+/**
+ * Thrown when the model thinks past THINKING_BUDGET_TOKENS without starting an
+ * answer. The retry tells the model to act instead of planning further.
+ */
+export class ThinkingBudgetExceededError extends Error {
+
+  public constructor(public readonly thinkingTokens: number) {
+    super(`Model thought for ~${Math.round(thinkingTokens / 1000)}k tokens without acting`);
+    this.name = "ThinkingBudgetExceededError";
+  }
+}
+
+/**
  * Thrown when there is not enough time left before the caller's deadline to
  * make (or retry) a model call. Callers treat it as a wall-clock timeout.
  */
@@ -148,7 +182,13 @@ export function isQuotaError(err: unknown): boolean {
  */
 export function isTransientOllamaError(err: unknown): boolean {
   if (isQuotaError(err)) return false;
-  if (err instanceof OllamaUnreachableError) return true;
+  if (
+    err instanceof OllamaUnreachableError ||
+    err instanceof ModelStreamStalledError ||
+    err instanceof ThinkingBudgetExceededError
+  ) {
+    return true;
+  }
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
   return TRANSIENT_ERROR_PATTERNS.some((pattern) => msg.includes(pattern));
@@ -158,42 +198,111 @@ export interface RetryOptions {
   readonly maxRetries?: number;
   readonly baseDelayMs?: number;
   readonly label?: string;
-  /** Per-attempt cap in ms. Defaults to CALL_TIMEOUT_SECONDS. */
+  /** Hard per-attempt ceiling in ms. Defaults to CALL_TIMEOUT_SECONDS. */
   readonly callTimeoutMs?: number;
   /** Absolute epoch-ms deadline; no attempt or retry starts past it. */
   readonly deadlineMs?: number;
-  /** Called when an attempt times out, to cancel the in-flight request. */
+  /** Called when an attempt is abandoned, to cancel the in-flight request. */
   readonly onCallTimeout?: () => void;
+  /**
+   * Live progress of the current streamed request. When given, an attempt is
+   * also abandoned when the stream goes idle or the model over-thinks.
+   */
+  readonly progress?: () => CallProgress | undefined;
+  /** Overrides IDLE_TIMEOUT_SECONDS / THINKING_BUDGET_TOKENS (tests). */
+  readonly limits?: StallLimits;
+  /** How often the watchdog checks progress. */
+  readonly pollMs?: number;
+}
+
+/** What the attempt function is told about the attempt it is making. */
+export interface AttemptContext {
+  readonly attempt: number;
+  readonly lastError: unknown;
 }
 
 // Don't start a retry with less than this left before the deadline — it could
 // not produce a useful answer and would only overrun the iteration.
 const MIN_USEFUL_CALL_MS = 15_000;
 
-async function raceTimeout<T>(
-  work: Promise<T>,
-  timeoutMs: number,
-  onTimeout?: () => void,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      onTimeout?.();
-      reject(new ModelCallTimeoutError(timeoutMs));
-    }, timeoutMs);
+// How often a running call reports its progress to the UI.
+const PROGRESS_EVENT_MS = 3_000;
+
+interface WatchOptions {
+  readonly timeoutMs: number;
+  readonly label: string;
+  readonly attemptStartedAt: number;
+  readonly onAbandon?: () => void;
+  readonly progress?: () => CallProgress | undefined;
+  readonly limits: StallLimits;
+  readonly pollMs: number;
+}
+
+// The progress record for this attempt's request, ignoring a stale one left
+// by an earlier call on the same model.
+function currentProgress(opts: WatchOptions): CallProgress | undefined {
+  const progress = opts.progress?.();
+  return progress && progress.startedAt >= opts.attemptStartedAt ? progress : undefined;
+}
+
+/**
+ * Race the attempt against a watchdog: the hard ceiling, plus — when progress
+ * is available — an idle-stream check and the thinking budget.
+ */
+async function raceWatchdog<T>(work: Promise<T>, opts: WatchOptions): Promise<T> {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let lastEventAt = opts.attemptStartedAt;
+  const watchdog = new Promise<never>((_, reject) => {
+    const abandon = (err: Error): void => {
+      opts.onAbandon?.();
+      reject(err);
+    };
+    timer = setInterval(() => {
+      const now = Date.now();
+      if (now - opts.attemptStartedAt >= opts.timeoutMs) {
+        abandon(new ModelCallTimeoutError(opts.timeoutMs));
+        return;
+      }
+      if (!opts.progress) return;
+      // Before the request is sent there is no record yet; idle time counts
+      // from the start of the attempt.
+      const progress = currentProgress(opts) ?? newProgress(opts.attemptStartedAt);
+      const stall = checkProgress(progress, now, opts.limits);
+      if (stall === 'idle') {
+        abandon(new ModelStreamStalledError(opts.limits.idleMs));
+        return;
+      }
+      if (stall === 'thinking_budget') {
+        abandon(new ThinkingBudgetExceededError(thinkingTokens(progress)));
+        return;
+      }
+      if (now - lastEventAt >= PROGRESS_EVENT_MS) {
+        lastEventAt = now;
+        emitAgentEvent("model_progress", {
+          label: opts.label,
+          phase: hasActed(progress) ? "writing" : progress.thinkingChars > 0 ? "thinking" : "waiting",
+          thinkingTokens: thinkingTokens(progress),
+          outputTokens: outputTokens(progress),
+          elapsedSeconds: Math.round((now - opts.attemptStartedAt) / 1000),
+        });
+      }
+    }, opts.pollMs);
   });
   try {
-    return await Promise.race([work, timeout]);
+    return await Promise.race([work, watchdog]);
   } finally {
-    clearTimeout(timer);
+    clearInterval(timer);
   }
 }
 
 /**
  * Run an Ollama call with exponential-backoff retry on transient errors.
  *
- * - Each attempt is capped at `callTimeoutMs` (default CALL_TIMEOUT_SECONDS);
- *   on expiry `onCallTimeout` cancels the request and the attempt is retried.
+ * - Each attempt is capped at `callTimeoutMs` (default CALL_TIMEOUT_SECONDS).
+ *   With `progress`, it is also abandoned when the stream sends nothing for
+ *   IDLE_TIMEOUT_SECONDS or the model thinks past THINKING_BUDGET_TOKENS
+ *   without acting. `onCallTimeout` cancels the request; the attempt is then
+ *   retried, and `fn` is told why the previous attempt failed.
  * - With a `deadlineMs`, no attempt starts (and no retry is scheduled) once
  *   the remaining time is too short to be useful — a DeadlineExceededError is
  *   thrown instead, so retries can never overrun the iteration.
@@ -201,7 +310,7 @@ async function raceTimeout<T>(
  * - Any other non-transient error is rethrown immediately.
  */
 export async function withOllamaRetry<T>(
-  fn: () => Promise<T>,
+  fn: (context: AttemptContext) => Promise<T>,
   options?: RetryOptions,
 ): Promise<T> {
   const maxRetries = options?.maxRetries ?? 3;
@@ -209,6 +318,11 @@ export async function withOllamaRetry<T>(
   const label = options?.label ?? "ollama";
   const callTimeoutMs = options?.callTimeoutMs ?? env.CALL_TIMEOUT_SECONDS * 1000;
   const deadlineMs = options?.deadlineMs;
+  const limits: StallLimits = options?.limits ?? {
+    idleMs: env.IDLE_TIMEOUT_SECONDS * 1000,
+    thinkingBudgetTokens: env.THINKING_BUDGET_TOKENS,
+  };
+  let lastError: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const remainingMs = deadlineMs === undefined ? Infinity : deadlineMs - Date.now();
@@ -216,8 +330,17 @@ export async function withOllamaRetry<T>(
     const attemptTimeoutMs = Math.min(callTimeoutMs, remainingMs);
 
     try {
-      return await raceTimeout(fn(), attemptTimeoutMs, options?.onCallTimeout);
+      return await raceWatchdog(fn({ attempt, lastError }), {
+        timeoutMs: attemptTimeoutMs,
+        label,
+        attemptStartedAt: Date.now(),
+        ...(options?.onCallTimeout ? { onAbandon: options.onCallTimeout } : {}),
+        ...(options?.progress ? { progress: options.progress } : {}),
+        limits,
+        pollMs: options?.pollMs ?? 1000,
+      });
     } catch (err) {
+      lastError = err;
       if (isQuotaError(err)) {
         throw err instanceof QuotaExceededError
           ? err
@@ -252,13 +375,24 @@ export async function withOllamaRetry<T>(
   throw new Error("withOllamaRetry: exhausted retries without returning");
 }
 
-// In-flight HTTP requests per chat model, so a timed-out call can be cancelled
-// at the socket. ChatOllama only checks an AbortSignal between streamed chunks,
-// so a request that never sends a byte would otherwise stay open server-side
-// (still generating, still counting against quota) after we give up on it.
-const inFlightRequests = new WeakMap<ChatOllama, Set<AbortController>>();
+// Per chat model: its in-flight HTTP requests, so an abandoned call can be
+// cancelled at the socket, and the live progress of its latest chat request.
+// ChatOllama only checks an AbortSignal between streamed chunks, so a request
+// that never sends a byte would otherwise stay open server-side (still
+// generating, still counting against quota) after we give up on it.
+interface ModelRequests {
+  readonly controllers: Set<AbortController>;
+  progress: CallProgress | undefined;
+}
 
-function trackingFetch(controllers: Set<AbortController>): Fetch {
+const modelRequests = new WeakMap<ChatOllama, ModelRequests>();
+
+function isChatRequest(input: Parameters<Fetch>[0]): boolean {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  return url.endsWith("/api/chat");
+}
+
+function trackingFetch(state: ModelRequests): Fetch {
   const tracked = async (input: Parameters<Fetch>[0], init?: Parameters<Fetch>[1]): Promise<Response> => {
     const controller = new AbortController();
     const outer = init?.signal;
@@ -266,11 +400,19 @@ function trackingFetch(controllers: Set<AbortController>): Fetch {
       if (outer.aborted) controller.abort(outer.reason);
       else outer.addEventListener("abort", () => controller.abort(outer.reason), { once: true });
     }
-    controllers.add(controller);
+    state.controllers.add(controller);
+    const progress = isChatRequest(input) ? newProgress(Date.now()) : undefined;
+    if (progress) state.progress = progress;
     try {
-      return await fetch(input, { ...init, signal: controller.signal });
+      const response = await fetch(input, { ...init, signal: controller.signal });
+      if (!progress || !response.body) return response;
+      return new Response(monitorBody(response.body, progress), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
     } catch (err) {
-      controllers.delete(controller);
+      state.controllers.delete(controller);
       throw err;
     }
   };
@@ -280,10 +422,23 @@ function trackingFetch(controllers: Set<AbortController>): Fetch {
 
 /** Abort every in-flight HTTP request made by this model. */
 export function abortModelRequests(model: ChatOllama): void {
-  const controllers = inFlightRequests.get(model);
-  if (!controllers) return;
-  for (const controller of controllers) controller.abort(new ModelCallTimeoutError(0));
-  controllers.clear();
+  const state = modelRequests.get(model);
+  if (!state) return;
+  for (const controller of state.controllers) controller.abort(new ModelCallTimeoutError(0));
+  state.controllers.clear();
+}
+
+/** Live progress of this model's latest chat request, if any. */
+export function modelProgress(model: ChatOllama): CallProgress | undefined {
+  return modelRequests.get(model)?.progress;
+}
+
+/** The retry options that let withOllamaRetry watch and cancel this model's calls. */
+export function watchModel(model: ChatOllama): Pick<RetryOptions, "onCallTimeout" | "progress"> {
+  return {
+    onCallTimeout: () => abortModelRequests(model),
+    progress: () => modelProgress(model),
+  };
 }
 
 export function createChatModel(model: string): ChatOllama {
@@ -293,20 +448,22 @@ export function createChatModel(model: string): ChatOllama {
     model,
     temperature: 0,
     numCtx: env.NUM_CTX,
+    // Caps one reply, thinking included, so no call can generate without end.
+    numPredict: env.MAX_OUTPUT_TOKENS,
     // Keep the HTTP connection alive to avoid socket-reset errors on long
     // generation runs. -1 means keep loaded indefinitely in Ollama.
     keepAlive: '-1m',
     ...(headers ? { headers } : {}),
   });
 
-  // Swap in a client whose requests we can abort (see inFlightRequests).
-  const controllers = new Set<AbortController>();
+  // Swap in a client whose requests we can abort and watch (see modelRequests).
+  const state: ModelRequests = { controllers: new Set<AbortController>(), progress: undefined };
   chat.client = new Ollama({
     host: env.OLLAMA_BASE_URL,
     ...(headers ? { headers } : {}),
-    fetch: trackingFetch(controllers),
+    fetch: trackingFetch(state),
   });
-  inFlightRequests.set(chat, controllers);
+  modelRequests.set(chat, state);
   return chat;
 }
 

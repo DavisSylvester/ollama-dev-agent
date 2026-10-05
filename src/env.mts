@@ -21,9 +21,18 @@ const envSchema = z.object({
   // Wall-clock cap per worker iteration (seconds). Independent of step count —
   // catches a single hung tool call that would otherwise consume the whole run.
   MAX_ITERATION_SECONDS: z.coerce.number().int().min(30).max(1800).default(420),
-  // Cap on a single model request (seconds). A hung call is aborted at the HTTP
-  // level and retried, instead of silently consuming the whole iteration.
-  CALL_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(1800).default(180),
+  // Hard ceiling on a single model request (seconds), even while it is still
+  // streaming. Stalls and runaway thinking are caught sooner by the two below.
+  CALL_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(1800).default(600),
+  // Abandon (and retry) a request whose stream sends no data for this long.
+  IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(5).max(900).default(60),
+  // Abandon a request whose model thinks past this many tokens without
+  // starting an answer; the retry tells it to act instead of planning.
+  THINKING_BUDGET_TOKENS: z.coerce.number().int().min(500).max(200000).default(8000),
+  // Most tokens one reply may generate, thinking included.
+  MAX_OUTPUT_TOKENS: z.coerce.number().int().min(1024).max(262144).default(16384),
+  // Most characters of knowledge-base lessons put in each worker prompt.
+  KB_PROMPT_MAX_CHARS: z.coerce.number().int().min(0).max(200000).default(8000),
   // When the provider rejects calls for quota/rate-limit reasons, the run saves
   // state and waits this long before retrying the affected tasks...
   QUOTA_PAUSE_MINUTES: z.coerce.number().min(0).max(240).default(15),

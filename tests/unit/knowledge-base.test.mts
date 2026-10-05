@@ -85,6 +85,26 @@ describe('formatForPrompt', () => {
     expect(formatForPrompt(kb, 'auth')).toContain('model: kimi-k2.6');
   });
 
+  it('stays within the character budget, filling the primary category first', () => {
+    const many = (prefix: string): KBEntry[] => Array.from({ length: 8 }, (_, i) => ({
+      issue: `${prefix} issue ${i}`, actual_prompt: 'p', actual_resolution: 'r',
+      generalized_prompt: 'g', generalized_resolution: 'x'.repeat(300), metadata: {},
+    }));
+    const big: KnowledgeBase = { ui: many('ui'), api: many('api'), database: many('db'), auth: many('auth'), terraform: [], 'github-actions': [] };
+    const out = formatForPrompt(big, 'database', 2000);
+    // Header lines are outside the per-section budget; allow a little slack.
+    expect(out.length).toBeLessThan(2300);
+    expect(out).toContain('db issue');
+    expect(out).not.toContain('auth issue');
+  });
+
+  it('clips an over-long lesson', () => {
+    const long: KnowledgeBase = { ...kb, api: [{ ...kb.api[0]!, generalized_resolution: 'y'.repeat(5000) }] };
+    const out = formatForPrompt(long, 'api');
+    expect(out).toContain('…');
+    expect(out.length).toBeLessThan(2000);
+  });
+
   it('surfaces proven solutions (status=resolved) separately from pitfalls', () => {
     const split: KnowledgeBase = {
       ui: [],

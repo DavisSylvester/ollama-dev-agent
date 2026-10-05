@@ -85,7 +85,7 @@ export async function runWorker(params: WorkerParams): Promise<string> {
 
   // Feed prior known issues + resolutions (most relevant category first) so the
   // worker can avoid repeating errors we have already solved.
-  const knowledgeBase = formatForPrompt(kb, categorizeTask(task));
+  const knowledgeBase = formatForPrompt(kb, categorizeTask(task), env.KB_PROMPT_MAX_CHARS);
 
   const systemPrompt = buildWorkerPrompt(
     task,

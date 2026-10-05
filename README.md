@@ -421,9 +421,16 @@ project's own typecheck, lint and tests, and keeps only upgrades that make nothi
 worse. A group that breaks is retried at the newest release of its current major,
 or pinned. Every decision is written to `docs/DEPENDENCIES.md` in the target project.
 
-**Timeouts and quota:** each model call is capped at `CALL_TIMEOUT_SECONDS` and
-cancelled at the HTTP level when it runs over. A "usage limit" / 429 response pauses
-the run (state saved) for `QUOTA_PAUSE_MINUTES` instead of failing tasks.
+**Timeouts and quota:** oda watches each model call's stream as it arrives. A call
+is cancelled at the HTTP level and retried when the stream sends nothing for
+`IDLE_TIMEOUT_SECONDS`, or when the model thinks past `THINKING_BUDGET_TOKENS`
+without acting. In that case the retry tells the model to make its first tool call
+instead of planning the whole task up front. `CALL_TIMEOUT_SECONDS` is a hard
+ceiling even for a call that is still streaming, and `MAX_OUTPUT_TOKENS` caps one
+reply. The status bar shows whether the model is waiting, thinking or writing. A
+"usage limit" / 429 response pauses the run (state saved) for
+`QUOTA_PAUSE_MINUTES` instead of failing tasks. Each worker prompt carries at most
+`KB_PROMPT_MAX_CHARS` of knowledge-base lessons.
 
 CLI flags override the corresponding `.env` values for that run. The Ollama Cloud
 API key is **never** a CLI argument — it always comes from `OLLAMA_API_KEY` in the

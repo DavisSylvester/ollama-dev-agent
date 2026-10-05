@@ -11,6 +11,7 @@
 | 0.3 `tsc` errors | Done: 16 → 0. Tools moved from zod to TypeBox via `src/tools/define-tool.mts` (also 4.4 for tools; `env.mts` still uses zod) |
 | 0.4 Lint script | Done (`eslint src`) |
 | 1.1 Per-call timeout | Done: `CALL_TIMEOUT_SECONDS`, deadline-aware retry with jitter, real HTTP abort via a tracking `fetch` (ChatOllama ignores `signal` on a silent connection — verified) |
+| 1.1b Runaway thinking | Done: the tracking `fetch` reads the stream; a call is abandoned on `IDLE_TIMEOUT_SECONDS` of silence or past `THINKING_BUDGET_TOKENS` without acting, and the retry nudges the model to act. `MAX_OUTPUT_TOKENS` caps a reply; knowledge-base lessons capped at `KB_PROMPT_MAX_CHARS`. LangChain upgraded to 1.x. Found on `D:\temp\4`: 4 of 6 replays of one worker call had not acted after 120 s; after the fix, 8 of 8 acted (2 via the nudge, at ~45 s) |
 | 1.2 Quota pause | Done: `QuotaExceededError`; the loop rethrows it and the scheduler puts the task back to pending, saves state, and pauses (`QUOTA_PAUSE_MINUTES`, capped by `QUOTA_MAX_PAUSE_MINUTES`) |
 | 1.3 Empty iterations | Done: worker or reviewer errors skip lint and review and keep the last real review; timeout and lint feedback carry the last review's issues forward |
 | 1.6 (part) | `--max-iter` validated (1–50) |
