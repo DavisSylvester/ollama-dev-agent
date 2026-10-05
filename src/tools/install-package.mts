@@ -1,10 +1,10 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 import { execa } from 'execa';
 
 export function createInstallPackageTool(workingDirectory: string): StructuredTool {
-  return tool(
+  return defineTool(
     async ({
       packages,
       dev,
@@ -35,9 +35,9 @@ export function createInstallPackageTool(workingDirectory: string): StructuredTo
     {
       name: 'install_package',
       description: 'Install one or more npm packages using `bun add`, optionally as dev dependencies',
-      schema: z.object({
-        packages: z.array(z.string()).describe('Package names to install'),
-        dev: z.boolean().default(false).describe('Install as dev dependencies'),
+      schema: Type.Object({
+        packages: Type.Array(Type.String(), { description: 'Package names to install' }),
+        dev: Type.Boolean({ default: false, description: 'Install as dev dependencies' }),
       }),
     },
   );

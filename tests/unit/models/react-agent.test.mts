@@ -318,13 +318,17 @@ describe('runReactAgent — budget warnings', () => {
 
     // Use a spy model wrapper to capture incoming messages
     const originalInvoke = model.invoke.bind(model);
-    (model as unknown as { invoke: typeof model.invoke }).invoke = async (messages: unknown[]) => {
+    (model as unknown as { invoke: typeof model.invoke }).invoke = async (
+      ...args: Parameters<typeof model.invoke>
+    ): ReturnType<typeof model.invoke> => {
+      const [input] = args;
+      const messages: readonly unknown[] = Array.isArray(input) ? input : [];
       for (const m of messages) {
         if (m instanceof HumanMessage && typeof m.content === 'string') {
           seenMessages.push(m.content);
         }
       }
-      return originalInvoke(messages);
+      return originalInvoke(...args);
     };
 
     await runReactAgent(model, [tool], SYSTEM, USER, 4);

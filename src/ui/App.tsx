@@ -5,7 +5,9 @@ import { TaskList } from './components/TaskList.tsx';
 import { StatusBar } from './components/StatusBar.tsx';
 import { PRDPreview } from './components/PRDPreview.tsx';
 import { ActivityFeed } from './components/ActivityFeed.tsx';
+import { CommandPanel, type CommandView } from './components/CommandPanel.tsx';
 import { formatFeedLine } from './lib/format-feed-line.mts';
+import { commandFailed, commandOutputText, describeToolCall, tailLines } from './lib/format-command.mts';
 import { agentEvents, uiEvents } from '../agent/events.mts';
 import type { Task, AgentPhase, PRD } from '../types/index.mts';
 
@@ -30,6 +32,16 @@ interface UIState {
   prdMarkdown: string;
   error: string | null;
   feed: string[];
+  // Latest command per running task, most recent first.
+  commands: CommandView[];
+}
+
+// Lines of command output shown per task, and how many tasks to show.
+const OUTPUT_LINES = 3;
+const MAX_COMMAND_ROWS = 4;
+
+function upsertCommand(commands: CommandView[], next: CommandView): CommandView[] {
+  return [next, ...commands.filter((c) => c.taskId !== next.taskId)].slice(0, MAX_COMMAND_ROWS);
 }
 
 const INITIAL_STATE: UIState = {
@@ -44,6 +56,7 @@ const INITIAL_STATE: UIState = {
   prdMarkdown: '',
   error: null,
   feed: [],
+  commands: [],
 };
 
 export function App({ version, onAgentStart, autoApprove = false }: AppProps): React.ReactElement {
@@ -91,7 +104,13 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
         tasks: prev.tasks.map((t) =>
           t.id === e.payload.taskId ? { ...t, status: 'complete' as const } : t,
         ),
+        commands: prev.commands.filter((c) => c.taskId !== e.payload.taskId),
       }));
+    };
+
+    const handleTaskFailed = (event: unknown): void => {
+      const e = event as { payload: { taskId: string } };
+      setState((prev) => ({ ...prev, commands: prev.commands.filter((c) => c.taskId !== e.payload.taskId) }));
     };
 
     const handleIterationStarted = (event: unknown): void => {
@@ -106,8 +125,21 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
       setState((prev) => ({ ...prev, phase: 'worker_running' }));
     };
 
-    const handleLintComplete = (): void => {
-      setState((prev) => ({ ...prev, phase: 'lint_running' }));
+    const handleLintComplete = (event: unknown): void => {
+      const e = event as { payload: { taskId?: string; clean?: boolean; output?: string } };
+      setState((prev) => ({
+        ...prev,
+        phase: 'lint_running',
+        commands: e.payload.taskId
+          ? upsertCommand(prev.commands, {
+              taskId: e.payload.taskId,
+              command: `bunx eslint (lint gate: ${e.payload.clean ? 'clean' : 'errors'})`,
+              output: tailLines(e.payload.output ?? '', OUTPUT_LINES),
+              running: false,
+              failed: e.payload.clean === false,
+            })
+          : prev.commands,
+      }));
     };
 
     const handleReviewerDecision = (): void => {
@@ -115,10 +147,34 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
     };
 
     const handleToolCalled = (event: unknown): void => {
-      const e = event as { payload: { toolName: string } };
+      const e = event as { payload: { toolName: string; args?: Record<string, unknown>; taskId?: string } };
       setState((prev) => ({
         ...prev,
         currentTool: e.payload.toolName,
+        commands: e.payload.taskId
+          ? upsertCommand(prev.commands, {
+              taskId: e.payload.taskId,
+              command: describeToolCall(e.payload.toolName, e.payload.args ?? {}),
+              output: [],
+              running: true,
+            })
+          : prev.commands,
+      }));
+    };
+
+    const handleToolResult = (event: unknown): void => {
+      const e = event as { payload: { toolName: string; args?: Record<string, unknown>; taskId?: string; output?: string } };
+      const taskId = e.payload.taskId;
+      if (!taskId) return;
+      setState((prev) => ({
+        ...prev,
+        commands: upsertCommand(prev.commands, {
+          taskId,
+          command: describeToolCall(e.payload.toolName, e.payload.args ?? {}),
+          output: tailLines(commandOutputText(e.payload.output ?? ''), OUTPUT_LINES),
+          running: false,
+          failed: commandFailed(e.payload.output ?? ''),
+        }),
       }));
     };
 
@@ -150,6 +206,8 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
     agentEvents.on('lint_complete', handleLintComplete);
     agentEvents.on('reviewer_decision', handleReviewerDecision);
     agentEvents.on('tool_called', handleToolCalled);
+    agentEvents.on('tool_result', handleToolResult);
+    agentEvents.on('task_failed', handleTaskFailed);
     agentEvents.on('complete', handleComplete);
     agentEvents.on('error', handleError);
     agentEvents.on('sizing_started', handleFeedEvent);
@@ -170,6 +228,8 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
       agentEvents.off('lint_complete', handleLintComplete);
       agentEvents.off('reviewer_decision', handleReviewerDecision);
       agentEvents.off('tool_called', handleToolCalled);
+      agentEvents.off('tool_result', handleToolResult);
+      agentEvents.off('task_failed', handleTaskFailed);
       agentEvents.off('complete', handleComplete);
       agentEvents.off('error', handleError);
       agentEvents.off('sizing_started', handleFeedEvent);
@@ -246,6 +306,7 @@ export function App({ version, onAgentStart, autoApprove = false }: AppProps): R
         currentTool={state.currentTool || undefined}
         iteration={state.currentIteration}
       />
+      <CommandPanel commands={state.commands} />
       <ActivityFeed lines={state.feed} />
     </Box>
   );

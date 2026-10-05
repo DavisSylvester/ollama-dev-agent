@@ -6,7 +6,7 @@ import { runReviewer } from './reviewer.mts';
 import { runLint, type LintResult } from '../tools/run-linter.mts';
 import { REACT_TIMEOUT_SENTINEL } from '../models/react-agent.mts';
 import { appendEntry, categorizeTask, generalizePrompt, generalizeText } from '../knowledge-base/index.mts';
-import { isTransientOllamaError } from '../models/index.mts';
+import { isQuotaError, isTransientOllamaError, QuotaExceededError } from '../models/ollama-client.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 import { DateTime } from 'luxon';
@@ -19,6 +19,7 @@ interface RalphLoopEvents {
   onReviewerStart?: (taskId: string) => void;
   onReviewerComplete?: (taskId: string, decision: ReviewDecision) => void;
   onToolCall?: (toolName: string, args: Record<string, unknown>) => void;
+  onToolResult?: (toolName: string, args: Record<string, unknown>, result: string) => void;
 }
 
 // Injected runner functions — used by tests to avoid real LLM/lint calls.
@@ -101,6 +102,7 @@ export class RalphLoop {
 
       const workerStartTime = DateTime.utc().toMillis();
       let workerOutput = '';
+      let workerErrored = false;
       try {
         workerOutput = await worker({
           task,
@@ -115,10 +117,17 @@ export class RalphLoop {
             toolCallLog.push({ step: toolCallLog.length + 1, toolName, args });
             events?.onToolCall?.(toolName, args);
           },
+          onToolResult: (toolName, args, result) => {
+            events?.onToolResult?.(toolName, args, result);
+          },
         });
       } catch (err) {
+        // Quota/rate limit: not this task's fault. Stop without spending the
+        // iteration so the orchestrator can pause the run and resume later.
+        if (isQuotaError(err)) throw toQuotaError(err);
         const message = err instanceof Error ? err.message : String(err);
         workerOutput = `Worker encountered an unexpected error: ${message}`;
+        workerErrored = true;
         logger.error({ taskId: task.id, iteration, error: message }, 'ralph.worker_error');
       }
       const workerDurationMs = DateTime.utc().toMillis() - workerStartTime;
@@ -147,6 +156,24 @@ export class RalphLoop {
         // Non-fatal: continue even if we can't persist
       }
 
+      // --- Worker error ---
+      // The worker never produced a result (its model calls failed after
+      // retries). Linting or reviewing an unchanged tree is wasted work, and
+      // overwriting the feedback file would lose the last real review — so keep
+      // that feedback for the next attempt and move on.
+      if (workerErrored) {
+        try {
+          await this.contextManager.saveActivityEntry(
+            task.id,
+            buildActivityEntry(iteration, 'WORKER_ERROR', toolCallLog, workerDurationMs, [workerOutput]),
+          );
+        } catch {
+          // Non-fatal
+        }
+        task.iterationCount = iteration;
+        continue;
+      }
+
       // --- Anti-pattern detection ---
       // Catch inefficient tool loops within a single iteration (e.g. re-running
       // run_tests repeatedly without converging) and log them to the KB so the
@@ -167,7 +194,10 @@ export class RalphLoop {
           'ralph.worker_timeout: step budget exhausted; skipping reviewer, forcing REVISE',
         );
 
-        const timeoutFeedback = buildTimeoutFeedback(workerDurationMs, toolCallLog.length);
+        const timeoutFeedback = withCarriedReview(
+          buildTimeoutFeedback(workerDurationMs, toolCallLog.length),
+          reviewerFeedback,
+        );
         const noDataReason =
           `The worker exhausted its step budget after ${formatDuration(workerDurationMs)} ` +
           `and ${toolCallLog.length} tool call(s). ` +
@@ -235,7 +265,7 @@ export class RalphLoop {
           'ralph.lint_failed: unfixable errors remain; skipping reviewer, forcing REVISE',
         );
 
-        const lintFeedback = buildLintFeedback(lintResult.output);
+        const lintFeedback = withCarriedReview(buildLintFeedback(lintResult.output), reviewerFeedback);
 
         try {
           await this.contextManager.saveReviewerFeedback(task.id, iteration, lintFeedback);
@@ -280,13 +310,22 @@ export class RalphLoop {
           workerOutput,
         });
       } catch (err) {
+        if (isQuotaError(err)) throw toQuotaError(err);
+        // The reviewer itself failed — that says nothing about the worker's
+        // code. Keep the last real review as feedback (don't overwrite it with
+        // an error message) and don't record a lesson; just try again.
         const message = err instanceof Error ? err.message : String(err);
-        decision = {
-          decision: 'revise',
-          feedback: `Reviewer encountered an unexpected error: ${message}`,
-          issues: [`Internal reviewer error: ${message}`],
-        };
         logger.error({ taskId: task.id, iteration, error: message }, 'ralph.reviewer_error');
+        try {
+          await this.contextManager.saveActivityEntry(
+            task.id,
+            buildActivityEntry(iteration, 'REVIEWER_ERROR', toolCallLog, workerDurationMs, [message]),
+          );
+        } catch {
+          // Non-fatal
+        }
+        task.iterationCount = iteration;
+        continue;
       }
 
       logger.info(
@@ -628,9 +667,49 @@ function summarizeToolCalls(log: ToolCallEntry[]): string {
   return [...counts.entries()].map(([name, count]) => `${name} (${count}x)`).join(', ');
 }
 
+const STATUS_LABELS = {
+  TIMED_OUT: 'TIMED OUT',
+  REVISE: 'REVISE',
+  LINT_FAILED: 'LINT FAILED',
+  WORKER_ERROR: 'WORKER ERROR',
+  REVIEWER_ERROR: 'REVIEWER ERROR',
+} as const;
+
+function toQuotaError(err: unknown): QuotaExceededError {
+  return err instanceof QuotaExceededError
+    ? err
+    : new QuotaExceededError(err instanceof Error ? err.message : String(err), { cause: err });
+}
+
+// Heading under which the last real review's issues are carried forward when an
+// iteration ends without a review (timeout or lint failure). Without this, the
+// timeout/lint feedback replaces the reviewer's demands and they are lost.
+export const CARRIED_REVIEW_HEADING = '## Outstanding issues from the last review';
+
+const NON_REVIEW_HEADINGS: readonly string[] = ['## ⚠ Worker Timed Out', '## 🔴 ESLint Validation Failed'];
+
+/** The last real review's content inside previous feedback, or '' if none. */
+export function outstandingReview(previous: string): string {
+  const idx = previous.indexOf(CARRIED_REVIEW_HEADING);
+  if (idx >= 0) return previous.slice(idx + CARRIED_REVIEW_HEADING.length).trim();
+  const trimmed = previous.trim();
+  if (NON_REVIEW_HEADINGS.some((heading) => trimmed.startsWith(heading))) return '';
+  return trimmed;
+}
+
+/** Append the last real review (if any) to feedback that is not a review. */
+export function withCarriedReview(feedback: string, previous: string): string {
+  const carried = outstandingReview(previous);
+  return carried ? `${feedback}
+
+${CARRIED_REVIEW_HEADING}
+
+${carried}` : feedback;
+}
+
 function buildActivityEntry(
   iteration: number,
-  status: 'TIMED_OUT' | 'REVISE' | 'LINT_FAILED',
+  status: 'TIMED_OUT' | 'REVISE' | 'LINT_FAILED' | 'WORKER_ERROR' | 'REVIEWER_ERROR',
   toolCallLog: ToolCallEntry[],
   durationMs: number,
   issues: readonly string[],
@@ -638,7 +717,7 @@ function buildActivityEntry(
   const timestamp = DateTime.utc().toISO() ?? '';
   const toolSummary = summarizeToolCalls(toolCallLog);
 
-  const statusLabel = status === 'TIMED_OUT' ? 'TIMED OUT' : status === 'LINT_FAILED' ? 'LINT FAILED' : 'REVISE';
+  const statusLabel = STATUS_LABELS[status];
 
   const lines: string[] = [
     `## Iteration ${iteration} — ${statusLabel}`,
@@ -659,7 +738,8 @@ function buildActivityEntry(
   }
 
   if (issues.length > 0) {
-    const sectionLabel = status === 'LINT_FAILED' ? 'Lint errors' : 'Reviewer issues';
+    const sectionLabel =
+      status === 'LINT_FAILED' ? 'Lint errors' : status === 'REVISE' || status === 'TIMED_OUT' ? 'Reviewer issues' : 'Errors';
     lines.push(`- **${sectionLabel}**:`);
     for (const issue of issues) {
       lines.push(`  - ${issue}`);

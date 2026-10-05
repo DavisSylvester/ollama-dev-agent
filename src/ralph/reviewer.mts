@@ -1,7 +1,8 @@
 import type { Task, ReviewDecision, ChecklistItem } from '../types/index.mts';
-import { createChatModel, withOllamaRetry } from '../models/index.mts';
+import { abortModelRequests, createChatModel, withOllamaRetry } from '../models/index.mts';
 import { SystemMessage, HumanMessage, type AIMessage } from '@langchain/core/messages';
 import { buildReviewerPrompt } from '../prd/index.mts';
+import { getDependencyReport, summarizeForPrompt } from '../deps/dependency-preflight.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 import { join } from 'node:path';
@@ -16,8 +17,26 @@ interface ReviewerParams {
 
 const MAX_REVIEWER_DECISION_RETRIES = 2;
 
+// A real decision line: "DECISION: SHIP" or "DECISION: REVISE", but not the
+// prompt template being echoed back ("DECISION: SHIP | REVISE", "SHIP or REVISE").
+const DECISION_LINE = /DECISION:\s*\**\s*(SHIP|REVISE)\b(?!\s*(?:\||\/|or\b))/gi;
+
+/**
+ * The reviewer's final decision: the LAST real DECISION line in the reply.
+ * Earlier matches may be quoted instructions or a changed mind; matching the
+ * first SHIP anywhere let an echoed template ship unreviewed work.
+ */
+export function finalDecision(response: string): { decision: 'ship' | 'revise'; index: number } | null {
+  let last: { decision: 'ship' | 'revise'; index: number } | null = null;
+  for (const match of response.matchAll(DECISION_LINE)) {
+    const word = match[1]?.toLowerCase();
+    if (word === 'ship' || word === 'revise') last = { decision: word, index: match.index };
+  }
+  return last;
+}
+
 function hasDecision(response: string): boolean {
-  return /DECISION:\s*(SHIP|REVISE)/i.test(response);
+  return finalDecision(response) !== null;
 }
 
 async function invokeReviewerWithRetry(
@@ -33,7 +52,7 @@ async function invokeReviewerWithRetry(
 
   const firstMessage = (await withOllamaRetry(
     () => model.invoke(baseMessages),
-    { label: 'reviewer.invoke' },
+    { label: 'reviewer.invoke', onCallTimeout: () => abortModelRequests(model) },
   )) as AIMessage;
   let response = extractContent(firstMessage);
 
@@ -55,7 +74,7 @@ async function invokeReviewerWithRetry(
             'Provide your complete review and decision now.',
           ),
         ]),
-      { label: 'reviewer.invoke' },
+      { label: 'reviewer.invoke', onCallTimeout: () => abortModelRequests(model) },
     )) as AIMessage;
     response = extractContent(retryMessage);
   }
@@ -68,8 +87,15 @@ export async function runReviewer(params: ReviewerParams): Promise<ReviewDecisio
 
   // Pre-load the files the worker created so the reviewer doesn't need tools
   const fileContents = await loadMentionedFiles(workerOutput, workingDirectory);
+  const dependencySummary = summarizeForPrompt(getDependencyReport(workingDirectory));
 
-  const systemPrompt = buildReviewerPrompt(task, workerOutput, featureName, fileContents);
+  const systemPrompt = buildReviewerPrompt(
+    task,
+    workerOutput,
+    featureName,
+    fileContents,
+    dependencySummary,
+  );
 
   const userPrompt =
     `Review the implementation of ${task.id}: ${task.name}\n\n` +
@@ -191,8 +217,9 @@ function extractContent(aiMessage: AIMessage): string {
 export function parseReviewDecision(response: string): ReviewDecision {
   const checklist = parseChecklist(response);
   const unmet = checklist.filter((c) => !c.met);
+  const final = finalDecision(response);
 
-  if (/DECISION:\s*SHIP/i.test(response)) {
+  if (final?.decision === 'ship') {
     // Pre-completion gate: a SHIP is only valid if every acceptance criterion
     // in the checklist is met. If the reviewer marked SHIP but left criteria
     // unchecked, override to REVISE with the unmet criteria as issues.
@@ -207,8 +234,9 @@ export function parseReviewDecision(response: string): ReviewDecision {
     return { decision: 'ship', feedback: response, issues: [], checklist };
   }
 
-  if (/DECISION:\s*REVISE/i.test(response)) {
-    const issues = extractIssues(response);
+  if (final?.decision === 'revise') {
+    // Issues belong to the final decision, so read the ISSUES block after it.
+    const issues = extractIssues(response.slice(final.index));
     return { decision: 'revise', feedback: response, issues, checklist };
   }
 

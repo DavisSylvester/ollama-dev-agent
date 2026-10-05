@@ -15,14 +15,15 @@
     "test:unit": "bun test tests/unit",
     "test:coverage": "bun test --coverage tests/unit",
     "test:integration": "bun test tests/integration",
-    "lint": "eslint 'src/**/*.{mts,tsx}'",
-    "lint:fix": "eslint 'src/**/*.{mts,tsx}' --fix",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@langchain/core": "^0.3.27",
     "@langchain/langgraph": "^0.2.36",
     "@langchain/ollama": "^0.1.5",
+    "@sinclair/typebox": "^0.34.52",
     "axios": "^1.7.9",
     "commander": "^12.1.0",
     "dotenv": "^17.4.2",
@@ -32,7 +33,9 @@
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
     "luxon": "^3.7.2",
+    "ollama": "^0.5.18",
     "react": "^18.3.1",
+    "semver": "^7.7.4",
     "sqlite3": "^6.0.1",
     "winston": "^3.19.0",
     "zod": "^4.3.6"
@@ -41,6 +44,7 @@
     "@types/bun": "^1.2.0",
     "@types/luxon": "^3.7.1",
     "@types/react": "^18.3.18",
+    "@types/semver": "^7.8.0",
     "eslint": "^9.17.0",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.19.1"

@@ -1,12 +1,12 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 import { glob } from 'glob';
 
 const MAX_RESULTS = 200;
 
 export function createGlobSearchTool(workingDirectory: string): StructuredTool {
-  return tool(
+  return defineTool(
     async ({
       pattern,
       ignore,
@@ -34,12 +34,11 @@ export function createGlobSearchTool(workingDirectory: string): StructuredTool {
     {
       name: 'glob_search',
       description: 'Search for files matching a glob pattern within the working directory',
-      schema: z.object({
-        pattern: z.string().describe('Glob pattern like **/*.ts'),
-        ignore: z
-          .array(z.string())
-          .optional()
-          .describe('Optional list of glob patterns to ignore'),
+      schema: Type.Object({
+        pattern: Type.String({ description: 'Glob pattern like **/*.ts' }),
+        ignore: Type.Optional(
+          Type.Array(Type.String(), { description: 'Optional list of glob patterns to ignore' }),
+        ),
       }),
     },
   );

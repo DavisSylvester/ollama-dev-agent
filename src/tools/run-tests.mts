@@ -1,10 +1,10 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 import { execa } from 'execa';
 
 export function createRunTestsTool(workingDirectory: string): StructuredTool {
-  return tool(
+  return defineTool(
     async ({ test_path }: { test_path?: string }): Promise<string> => {
       try {
         const args = ['test'];
@@ -28,11 +28,10 @@ export function createRunTestsTool(workingDirectory: string): StructuredTool {
     {
       name: 'run_tests',
       description: 'Run the project tests using `bun test`, optionally targeting a specific file or directory',
-      schema: z.object({
-        test_path: z
-          .string()
-          .optional()
-          .describe('Optional: specific test file or directory to run'),
+      schema: Type.Object({
+        test_path: Type.Optional(
+          Type.String({ description: 'Optional: specific test file or directory to run' }),
+        ),
       }),
     },
   );

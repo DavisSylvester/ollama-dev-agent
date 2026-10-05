@@ -1,6 +1,6 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 
 interface SearchResult {
   title: string;
@@ -21,7 +21,7 @@ interface BraveSearchResponse {
 }
 
 export function createWebSearchBraveTool(apiKey: string | undefined): StructuredTool {
-  return tool(
+  return defineTool(
     async ({
       query,
       max_results,
@@ -68,9 +68,9 @@ export function createWebSearchBraveTool(apiKey: string | undefined): Structured
     {
       name: 'web_search_brave',
       description: 'Search the web using Brave Search API and return titles, URLs, and snippets',
-      schema: z.object({
-        query: z.string().describe('Search query'),
-        max_results: z.number().default(5).describe('Maximum number of results to return'),
+      schema: Type.Object({
+        query: Type.String({ description: 'Search query' }),
+        max_results: Type.Number({ default: 5, description: 'Maximum number of results to return' }),
       }),
     },
   );

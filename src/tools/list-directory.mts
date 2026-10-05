@@ -1,6 +1,6 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { validatePath } from './path-validator.mts';
@@ -12,7 +12,7 @@ interface DirectoryEntry {
 }
 
 export function createListDirectoryTool(workingDirectory: string): StructuredTool {
-  return tool(
+  return defineTool(
     async ({ path }: { path: string }): Promise<string> => {
       try {
         const resolved = validatePath(path, workingDirectory);
@@ -42,11 +42,8 @@ export function createListDirectoryTool(workingDirectory: string): StructuredToo
     {
       name: 'list_directory',
       description: 'List the contents of a directory, returning name, type, and size for each entry',
-      schema: z.object({
-        path: z
-          .string()
-          .default('.')
-          .describe('Directory path relative to working dir'),
+      schema: Type.Object({
+        path: Type.String({ default: '.', description: 'Directory path relative to working dir' }),
       }),
     },
   );

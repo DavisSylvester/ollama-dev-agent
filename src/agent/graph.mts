@@ -12,6 +12,9 @@ import { RalphLoop } from '../ralph/index.mts';
 import { ContextManager } from '../ralph/context-manager.mts';
 import { createWorkerTools } from '../tools/index.mts';
 import { env } from '../env.mts';
+import { logger } from '../logger.mts';
+import { isQuotaError } from '../models/ollama-client.mts';
+import { runDependencyPreflight } from '../deps/dependency-preflight.mts';
 import { saveRunState, buildRunState } from './run-state.mts';
 import { stampStarted, stampFinished } from './progress-board.mts';
 import type { AgentStateType } from './state.mts';
@@ -19,6 +22,63 @@ import type { Task } from '../types/index.mts';
 
 function nowIsoOrNull(tasks: Task[], id: string): string | null {
   return tasks.find((t) => t.id === id)?.completedAt ?? null;
+}
+
+/**
+ * Thrown when the provider's quota stays exhausted for longer than
+ * QUOTA_MAX_PAUSE_MINUTES. Run state is already saved, so re-running the same
+ * command resumes where this run stopped.
+ */
+export class QuotaPauseExceededError extends Error {
+
+  public constructor(pausedMinutes: number) {
+    super(
+      `Model quota still exhausted after pausing ${Math.round(pausedMinutes)} minute(s). ` +
+        `Run state is saved — re-run the same oda command to resume.`,
+    );
+    this.name = 'QuotaPauseExceededError';
+  }
+}
+
+// When the current quota pause started (epoch ms), or null when not paused.
+// Reset as soon as a batch runs without hitting the quota.
+let quotaPauseStartedAt: number | null = null;
+
+// Overridable sleep so tests don't actually wait out a quota pause.
+let sleepFn: (ms: number) => Promise<void> = (ms) => Bun.sleep(ms);
+export function setQuotaSleepForTests(fn: (ms: number) => Promise<void>): void {
+  sleepFn = fn;
+}
+export function resetQuotaPauseForTests(): void {
+  quotaPauseStartedAt = null;
+}
+
+// Overridable RalphLoop construction so scheduler tests can stub a task run
+// without a process-wide module mock (which leaks into other test files).
+type RalphLoopFactory = (...args: ConstructorParameters<typeof RalphLoop>) => Pick<RalphLoop, 'runTask'>;
+const defaultRalphLoopFactory: RalphLoopFactory = (...args) => new RalphLoop(...args);
+let createRalphLoop: RalphLoopFactory = defaultRalphLoopFactory;
+export function setRalphLoopFactoryForTests(factory: RalphLoopFactory | null): void {
+  createRalphLoop = factory ?? defaultRalphLoopFactory;
+}
+
+/**
+ * Wait out a quota/rate-limit rejection. The affected tasks were already put
+ * back to pending and the run state saved; after the pause the scheduler
+ * retries them. Gives up (throws) once the total pause exceeds the cap.
+ */
+async function pauseForQuota(taskIds: string[], message: string): Promise<void> {
+  const now = DateTime.utc().toMillis();
+  quotaPauseStartedAt ??= now;
+  const pausedMinutes = (now - quotaPauseStartedAt) / 60_000;
+  if (pausedMinutes >= env.QUOTA_MAX_PAUSE_MINUTES) {
+    throw new QuotaPauseExceededError(pausedMinutes);
+  }
+
+  const waitMinutes = env.QUOTA_PAUSE_MINUTES;
+  logger.warn({ taskIds, waitMinutes, pausedMinutes: Math.round(pausedMinutes), error: message }, 'graph.quota_paused');
+  emitAgentEvent('quota_paused', { taskIds, waitMinutes, message });
+  await sleepFn(waitMinutes * 60_000);
 }
 
 // --- Node: draft_plan ---
@@ -151,7 +211,7 @@ export async function ratifyPlanNode(
 // and runs them in parallel. One call to this node processes one batch of
 // ready tasks, then the conditional edge loops back if more remain.
 
-async function runTaskNode(
+export async function runTaskNode(
   state: AgentStateType,
 ): Promise<Partial<AgentStateType>> {
   const readyTasks = findReadyTasks(state.tasks);
@@ -185,6 +245,20 @@ async function runTaskNode(
     return { tasks: mergedTasks, phase: 'executing_tasks' };
   }
 
+  // Keep dependencies current. Runs here, between batches, because no task is
+  // writing to the tree at this point. Never fatal: a failed preflight just
+  // leaves versions as they are.
+  if (env.DEP_UPGRADE) {
+    try {
+      const report = await runDependencyPreflight(state.workingDirectory);
+      if (report.upgraded.length > 0 || report.pinned.length > 0) {
+        emitAgentEvent('dependencies_checked', { upgraded: report.upgraded, pinned: report.pinned });
+      }
+    } catch (err) {
+      logger.warn({ error: String(err) }, 'deps.preflight_failed');
+    }
+  }
+
   // Mark ready tasks as in_progress (stamping startedAt) before launching
   const tasksWithProgress: Task[] = state.tasks.map((t) =>
     readyTasks.some((r) => r.id === t.id) ? stampStarted(t) : t,
@@ -201,6 +275,8 @@ async function runTaskNode(
   // Merge settled results back into the full task list
   let mergedTasks: Task[] = tasksWithProgress;
   const completedIds: string[] = [];
+  const quotaTaskIds: string[] = [];
+  let quotaMessage = '';
 
   for (let i = 0; i < stampedReady.length; i++) {
     const task = stampedReady[i]!;
@@ -211,11 +287,30 @@ async function runTaskNode(
         t.id === task.id ? result.value : t,
       );
       if (result.value.status === 'complete') completedIds.push(task.id);
-    } else {
-      // Unexpected error from runSingleTask itself — mark failed
+    } else if (isQuotaError(result.reason)) {
+      // Quota/rate limit: not the task's fault. Put it back to pending so it
+      // is retried after the pause, rather than failing it (and every task
+      // that depends on it).
+      quotaTaskIds.push(task.id);
+      quotaMessage = result.reason instanceof Error ? result.reason.message : String(result.reason);
       mergedTasks = mergedTasks.map((t) =>
-        t.id === task.id ? { ...t, status: 'failed' as const } : t,
+        t.id === task.id ? { ...t, status: 'pending' as const } : t,
       );
+    } else {
+      // Unexpected error from runSingleTask itself — mark failed, and report
+      // it like any other failure so the progress board doesn't show the task
+      // as in progress forever.
+      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      logger.error({ taskId: task.id, error: reason }, 'graph.task_crashed');
+      const finished = stampFinished(task, 'failed');
+      mergedTasks = mergedTasks.map((t) => (t.id === task.id ? finished : t));
+      emitAgentEvent('task_failed', {
+        taskId: task.id,
+        taskName: task.name,
+        iterations: task.iterationCount,
+        reason: `Crashed: ${reason}`,
+        completedAt: finished.completedAt ?? null,
+      });
     }
   }
 
@@ -263,9 +358,16 @@ async function runTaskNode(
       prd: state.prd,
       tasks: mergedTasks,
     }),
-  ).catch(() => {
-    // Best-effort — do not abort the run on a state write failure.
+  ).catch((err: unknown) => {
+    // Best-effort — do not abort the run on a state write failure, but say so.
+    logger.error({ error: String(err) }, 'graph.state_save_failed');
   });
+
+  if (quotaTaskIds.length > 0) {
+    await pauseForQuota(quotaTaskIds, quotaMessage);
+  } else {
+    quotaPauseStartedAt = null;
+  }
 
   return {
     tasks: mergedTasks,
@@ -289,7 +391,7 @@ async function runSingleTask(
 
   const workerTools = createWorkerTools(state.workingDirectory, env.BRAVE_API_KEY);
 
-  const ralph = new RalphLoop(
+  const ralph = createRalphLoop(
     state.workingDirectory,
     state.featureSlug,
     state.featureName,
@@ -334,6 +436,10 @@ async function runSingleTask(
       },
       onToolCall: (toolName, args) => {
         emitAgentEvent('tool_called', { toolName, args, taskId: task.id });
+      },
+      onToolResult: (toolName, args, result) => {
+        // Only the tail is shown, so don't ship whole file contents to the UI.
+        emitAgentEvent('tool_result', { toolName, args, taskId: task.id, output: result.slice(-2000) });
       },
     },
   );

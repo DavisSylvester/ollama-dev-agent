@@ -1,4 +1,5 @@
 import { ChatOllama } from '@langchain/ollama';
+import { Ollama, type Fetch } from 'ollama';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 
@@ -77,11 +78,75 @@ const TRANSIENT_ERROR_PATTERNS: readonly string[] = [
   "504",
 ];
 
+// Substrings (lower-cased) that mark a usage-quota or rate-limit rejection.
+// These are NOT transient: retrying within seconds cannot succeed, and treating
+// them as task failures burns every remaining iteration in seconds. Callers
+// must pause the run instead (see QuotaExceededError).
+const QUOTA_ERROR_PATTERNS: readonly string[] = [
+  "reached your",
+  "usage limit",
+  "hour limit",
+  "weekly limit",
+  "monthly limit",
+  "quota",
+  "rate limit",
+  "rate-limit",
+  "too many requests",
+  "status code 429",
+  "http 429",
+];
+
+/**
+ * Thrown when the model provider rejects a call for quota or rate-limit
+ * reasons. Never counted as a task failure — the run should save state and
+ * pause until the quota resets.
+ */
+export class QuotaExceededError extends Error {
+
+  public constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "QuotaExceededError";
+  }
+}
+
+/**
+ * Thrown when a single model call exceeds CALL_TIMEOUT_SECONDS. Its message
+ * contains "timed out", so it is retried like any other transient error.
+ */
+export class ModelCallTimeoutError extends Error {
+
+  public constructor(public readonly timeoutMs: number) {
+    super(`Model call timed out after ${Math.round(timeoutMs / 1000)}s`);
+    this.name = "ModelCallTimeoutError";
+  }
+}
+
+/**
+ * Thrown when there is not enough time left before the caller's deadline to
+ * make (or retry) a model call. Callers treat it as a wall-clock timeout.
+ */
+export class DeadlineExceededError extends Error {
+
+  public constructor(public readonly label: string) {
+    super(`${label}: no time left before the iteration deadline`);
+    this.name = "DeadlineExceededError";
+  }
+}
+
+export function isQuotaError(err: unknown): boolean {
+  if (err instanceof QuotaExceededError) return true;
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return QUOTA_ERROR_PATTERNS.some((pattern) => msg.includes(pattern));
+}
+
 /**
  * True when an error looks transient (connectivity/timeout) and is therefore
- * worth retrying. {@link OllamaUnreachableError} always qualifies.
+ * worth retrying. {@link OllamaUnreachableError} always qualifies; a quota
+ * error never does.
  */
 export function isTransientOllamaError(err: unknown): boolean {
+  if (isQuotaError(err)) return false;
   if (err instanceof OllamaUnreachableError) return true;
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
@@ -92,13 +157,47 @@ export interface RetryOptions {
   readonly maxRetries?: number;
   readonly baseDelayMs?: number;
   readonly label?: string;
+  /** Per-attempt cap in ms. Defaults to CALL_TIMEOUT_SECONDS. */
+  readonly callTimeoutMs?: number;
+  /** Absolute epoch-ms deadline; no attempt or retry starts past it. */
+  readonly deadlineMs?: number;
+  /** Called when an attempt times out, to cancel the in-flight request. */
+  readonly onCallTimeout?: () => void;
+}
+
+// Don't start a retry with less than this left before the deadline — it could
+// not produce a useful answer and would only overrun the iteration.
+const MIN_USEFUL_CALL_MS = 15_000;
+
+async function raceTimeout<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  onTimeout?: () => void,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      onTimeout?.();
+      reject(new ModelCallTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
- * Run an Ollama call with exponential-backoff retry on transient errors. A
- * non-transient error (e.g. a bad request or a model error) is rethrown
- * immediately. Use this to wrap every worker/reviewer model invocation so a
- * brief cloud drop is retried transparently instead of burning an iteration.
+ * Run an Ollama call with exponential-backoff retry on transient errors.
+ *
+ * - Each attempt is capped at `callTimeoutMs` (default CALL_TIMEOUT_SECONDS);
+ *   on expiry `onCallTimeout` cancels the request and the attempt is retried.
+ * - With a `deadlineMs`, no attempt starts (and no retry is scheduled) once
+ *   the remaining time is too short to be useful — a DeadlineExceededError is
+ *   thrown instead, so retries can never overrun the iteration.
+ * - A quota/rate-limit rejection is rethrown at once as QuotaExceededError.
+ * - Any other non-transient error is rethrown immediately.
  */
 export async function withOllamaRetry<T>(
   fn: () => Promise<T>,
@@ -106,15 +205,34 @@ export async function withOllamaRetry<T>(
 ): Promise<T> {
   const maxRetries = options?.maxRetries ?? 3;
   const baseDelayMs = options?.baseDelayMs ?? 2000;
+  const label = options?.label ?? "ollama";
+  const callTimeoutMs = options?.callTimeoutMs ?? env.CALL_TIMEOUT_SECONDS * 1000;
+  const deadlineMs = options?.deadlineMs;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const remainingMs = deadlineMs === undefined ? Infinity : deadlineMs - Date.now();
+    if (remainingMs <= 0) throw new DeadlineExceededError(label);
+    const attemptTimeoutMs = Math.min(callTimeoutMs, remainingMs);
+
     try {
-      return await fn();
+      return await raceTimeout(fn(), attemptTimeoutMs, options?.onCallTimeout);
     } catch (err) {
+      if (isQuotaError(err)) {
+        throw err instanceof QuotaExceededError
+          ? err
+          : new QuotaExceededError(err instanceof Error ? err.message : String(err), { cause: err });
+      }
       if (attempt === maxRetries || !isTransientOllamaError(err)) throw err;
-      const delayMs = baseDelayMs * 2 ** attempt;
+
+      // Full jitter around the exponential step so parallel workers that
+      // failed together don't retry in lockstep.
+      const delayMs = Math.round(baseDelayMs * 2 ** attempt * (0.5 + Math.random()));
+      if (deadlineMs !== undefined && Date.now() + delayMs + MIN_USEFUL_CALL_MS > deadlineMs) {
+        logger.warn({ attempt: attempt + 1, label, error: String(err) }, "ollama.retry_skipped_deadline");
+        throw new DeadlineExceededError(label);
+      }
       logger.warn(
-        { attempt: attempt + 1, maxRetries, delayMs, label: options?.label ?? "ollama", error: String(err) },
+        { attempt: attempt + 1, maxRetries, delayMs, label, error: String(err) },
         "ollama.transient_retry",
       );
       await Bun.sleep(delayMs);
@@ -125,9 +243,43 @@ export async function withOllamaRetry<T>(
   throw new Error("withOllamaRetry: exhausted retries without returning");
 }
 
+// In-flight HTTP requests per chat model, so a timed-out call can be cancelled
+// at the socket. ChatOllama only checks an AbortSignal between streamed chunks,
+// so a request that never sends a byte would otherwise stay open server-side
+// (still generating, still counting against quota) after we give up on it.
+const inFlightRequests = new WeakMap<ChatOllama, Set<AbortController>>();
+
+function trackingFetch(controllers: Set<AbortController>): Fetch {
+  const tracked = async (input: Parameters<Fetch>[0], init?: Parameters<Fetch>[1]): Promise<Response> => {
+    const controller = new AbortController();
+    const outer = init?.signal;
+    if (outer) {
+      if (outer.aborted) controller.abort(outer.reason);
+      else outer.addEventListener("abort", () => controller.abort(outer.reason), { once: true });
+    }
+    controllers.add(controller);
+    try {
+      return await fetch(input, { ...init, signal: controller.signal });
+    } catch (err) {
+      controllers.delete(controller);
+      throw err;
+    }
+  };
+  // Bun's fetch type also carries preconnect(); keep the wrapper a full fetch.
+  return Object.assign(tracked, { preconnect: fetch.preconnect });
+}
+
+/** Abort every in-flight HTTP request made by this model. */
+export function abortModelRequests(model: ChatOllama): void {
+  const controllers = inFlightRequests.get(model);
+  if (!controllers) return;
+  for (const controller of controllers) controller.abort(new ModelCallTimeoutError(0));
+  controllers.clear();
+}
+
 export function createChatModel(model: string): ChatOllama {
   const headers = authHeaders();
-  return new ChatOllama({
+  const chat = new ChatOllama({
     baseUrl: env.OLLAMA_BASE_URL,
     model,
     temperature: 0,
@@ -137,6 +289,16 @@ export function createChatModel(model: string): ChatOllama {
     keepAlive: '-1m',
     ...(headers ? { headers } : {}),
   });
+
+  // Swap in a client whose requests we can abort (see inFlightRequests).
+  const controllers = new Set<AbortController>();
+  chat.client = new Ollama({
+    host: env.OLLAMA_BASE_URL,
+    ...(headers ? { headers } : {}),
+    fetch: trackingFetch(controllers),
+  });
+  inFlightRequests.set(chat, controllers);
+  return chat;
 }
 
 const CODER_FALLBACKS = ['qwen3-coder:30b', 'devstral-small-2:24b', 'deepseek-r1:32b'] as const;

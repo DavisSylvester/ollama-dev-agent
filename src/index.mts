@@ -33,6 +33,7 @@ program
   // Planning behavior
   .option('--no-research', 'Disable web-search planning (fast single-shot PRD)')
   .option('--fresh', 'Ignore any saved state and start a clean run (no resume)')
+  .option('--no-dep-upgrade', 'Skip the automatic upgrade of outdated dependencies before each batch')
   // Step budgets
   .option('--planner-max-steps <number>', 'Override the planner research step budget')
   .option('--max-react-steps <number>', 'Override the worker ReAct step budget')
@@ -54,6 +55,7 @@ const opts = program.opts<{
   plannerMaxSteps?: string;
   maxReactSteps?: string;
   fresh?: boolean;
+  depUpgrade: boolean;
 }>();
 
 // Translate CLI flags into env overrides before the agent reads any config.
@@ -64,6 +66,7 @@ if (opts.editorModel) overrides.EDITOR_MODEL = opts.editorModel;
 if (opts.cloud) overrides.OLLAMA_BASE_URL = 'https://ollama.com';
 if (opts.baseUrl) overrides.OLLAMA_BASE_URL = opts.baseUrl; // explicit --base-url wins over --cloud
 if (opts.research === false) overrides.RESEARCH_PLANNING = false; // env governs when flag absent
+if (opts.depUpgrade === false) overrides.DEP_UPGRADE = false;
 const plannerSteps = opts.plannerMaxSteps ? parseInt(opts.plannerMaxSteps, 10) : NaN;
 if (!Number.isNaN(plannerSteps)) overrides.PLANNER_MAX_STEPS = plannerSteps;
 const reactSteps = opts.maxReactSteps ? parseInt(opts.maxReactSteps, 10) : NaN;
@@ -71,7 +74,13 @@ if (!Number.isNaN(reactSteps)) overrides.MAX_REACT_STEPS = reactSteps;
 applyEnvOverrides(overrides);
 
 const workingDirectory = resolve(opts.cwd);
-const maxIterations = parseInt(opts.maxIter, 10);
+// Reject a non-numeric or out-of-range --max-iter instead of running with NaN.
+const parsedMaxIter = parseInt(opts.maxIter, 10);
+if (Number.isNaN(parsedMaxIter) || parsedMaxIter < 1 || parsedMaxIter > 50) {
+  console.error(`--max-iter must be a whole number from 1 to 50 (got "${opts.maxIter}")`);
+  process.exit(1);
+}
+const maxIterations = parsedMaxIter;
 
 const config: AgentConfig = {
   workingDirectory,
