@@ -432,6 +432,24 @@ reply. The status bar shows whether the model is waiting, thinking or writing. A
 `QUOTA_PAUSE_MINUTES` instead of failing tasks. Each worker prompt carries at most
 `KB_PROMPT_MAX_CHARS` of knowledge-base lessons.
 
+**Domain playbooks:** every task has one domain (`ui`, `api`, `services`,
+`database`, `auth`, `iac`, `e2e`, `ci`). A playbook is a Markdown file of rules for
+one domain, and oda adds it to the worker and reviewer prompts for that domain's
+tasks only, capped at `PLAYBOOK_MAX_CHARS` (0 turns playbooks off). Shared
+playbooks live in `~/.ollama-agents/playbooks/` (`PLAYBOOKS_DIR` to change it) and
+silo reads the same folder. A `playbooks/` folder in the target project replaces a
+shared playbook with the same `name`.
+
+```markdown
+---
+name: angular-ui
+domain: ui
+keywords: angular, standalone component, scss
+description: Angular frontends with signals and SCSS
+---
+- Standalone components only; state in signal-based services.
+```
+
 CLI flags override the corresponding `.env` values for that run. The Ollama Cloud
 API key is **never** a CLI argument — it always comes from `OLLAMA_API_KEY` in the
 environment.

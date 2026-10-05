@@ -7,6 +7,7 @@ import { runReactAgent } from '../models/index.mts';
 import { buildWorkerPrompt } from '../prd/index.mts';
 import { getDependencyReport, summarizeForPrompt } from '../deps/dependency-preflight.mts';
 import { loadKnowledgeBase, categorizeTask, formatForPrompt } from '../knowledge-base/index.mts';
+import { playbookSectionFor } from '../playbooks/load-playbooks.mts';
 import { env } from '../env.mts';
 
 const LISTING_IGNORE = new Set(['.ai', 'node_modules', '.git', 'dist', '.cache', 'coverage']);
@@ -76,10 +77,11 @@ export async function runWorker(params: WorkerParams): Promise<string> {
     onToolResult,
   } = params;
 
-  const [directoryListing, availablePackages, kb] = await Promise.all([
+  const [directoryListing, availablePackages, kb, playbooks] = await Promise.all([
     buildDirectoryListing(workingDirectory),
     readAvailablePackages(workingDirectory),
     loadKnowledgeBase(),
+    playbookSectionFor(workingDirectory, task.domain),
   ]);
   const dependencySummary = summarizeForPrompt(getDependencyReport(workingDirectory));
 
@@ -98,6 +100,7 @@ export async function runWorker(params: WorkerParams): Promise<string> {
     availablePackages,
     knowledgeBase,
     dependencySummary,
+    playbooks,
   );
 
   const userPrompt =
