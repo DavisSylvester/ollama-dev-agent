@@ -2,7 +2,17 @@ import type { Task } from '../types/index.mts';
 import type { DebatePersona, ProposedStory, PersonaStance } from './debate.mts';
 import type { DocSummary } from './doc-summarizer.mts';
 import { env } from '../env.mts';
-import { formatTypeScriptVersionRule } from './typescript-version.mts';
+import { formatDependencyRule } from '../deps/dependency-policy.mts';
+import { getShell, shellGuide } from '../shell/resolve-shell.mts';
+
+// The shell shell_exec really uses on this machine, so the model writes
+// commands for it instead of guessing (the old text hard-coded cmd.exe).
+function shellDialectRule(): string {
+  const resolved = getShell();
+  return resolved.ok
+    ? shellGuide(resolved.shell)
+    : `No usable shell was found on this machine (${resolved.error}), so \`shell_exec\` will refuse every command — use the dedicated tools.`;
+}
 
 export function buildPRDGenerationPrompt(userPrompt: string, research: boolean = true): string {
   const researchSection = research
@@ -307,7 +317,7 @@ export function buildWorkerPrompt(
   directoryListing: string = '',
   availablePackages: string = '',
   knowledgeBase: string = '',
-  latestTypeScriptVersion: string | null = null,
+  dependencySummary: string = '',
 ): string {
   const stepBudget = env.MAX_REACT_STEPS;
   const explorationBudget = Math.min(3, Math.floor(stepBudget * 0.15));
@@ -417,7 +427,7 @@ You have a hard limit of **${stepBudget} steps** for this task. Spend them wisel
 
 **Reading & searching — use the dedicated tools, NOT the shell:** Inspect files only with \`read_file\`, \`glob_search\`, and \`grep_search\`. Do **NOT** use \`shell_exec\` to \`cat\`, \`type\`, \`ls\`, \`dir\`, \`find\`, or otherwise read/list/search files — it wastes steps and fails on shell-dialect mismatches.
 
-**Shell dialect:** \`shell_exec\` runs in **Windows cmd.exe**, not bash. Reserve it **only** for running the test command. If you ever must use it directly, use cmd syntax (\`type\`, \`2>nul\`) — never bash syntax (\`cat\`, \`2>/dev/null\`, \`&&\` chains of Unix tools). Do not guess between dialects across calls.
+**Shell dialect:** ${shellDialectRule()} Prefer the dedicated tools; reserve \`shell_exec\` for commands they can't cover. A command written for another shell, or one that calls a program not installed on this machine, is refused with the reason — rewrite it, don't retry it unchanged.
 
 ## Instructions
 
@@ -437,7 +447,7 @@ ${step1}
 
 ## TypeScript Standards
 
-${formatTypeScriptVersionRule(latestTypeScriptVersion)}
+${formatDependencyRule(dependencySummary)}
 - Use **strict mode** TypeScript — never use \`any\`, use \`unknown\` or proper types
 - All source files must use the \`.mts\` extension
 - **All filenames must use kebab-case** — e.g., \`add-card.mts\`, \`board-state.mts\`, \`get-board.test.mts\`; never camelCase (\`addCard.mts\`) or PascalCase (\`AddCard.mts\`)
@@ -598,7 +608,7 @@ export function buildReviewerPrompt(
   workerOutput: string,
   featureName: string,
   fileContents: readonly LoadedFile[] = [],
-  latestTypeScriptVersion: string | null = null,
+  dependencySummary: string = '',
 ): string {
   const filesSection =
     fileContents.length > 0
@@ -648,7 +658,7 @@ ${filesSection}
    - \`.mts\` extensions on all imports between project files
    - No implicit \`any\` from missing types
    - Any method exceeding 50 lines — flag it and request extraction into a private helper
-   - **REVISE immediately** if a \`package.json\` shown above pins \`typescript\` below ${latestTypeScriptVersion ? `\`${latestTypeScriptVersion}\`` : 'the newest stable release'} — unless the worker's report names a required tool that does not support the newer version yet
+   - Do **NOT** REVISE over dependency versions in \`package.json\` — oda upgrades and pins them itself before each batch and records why in \`docs/DEPENDENCIES.md\`.${dependencySummary ? ` ${dependencySummary}` : ''}
    - **REVISE immediately** if any filename uses camelCase or PascalCase (e.g., \`addCard.mts\`, \`AddCard.mts\`) — all filenames must be kebab-case (e.g., \`add-card.mts\`)
 4. Check for CSS & styling violations — **REVISE immediately if any of these appear**:
    - Inline styles (\`style={{ }}\` or \`style="..."\`) — must move to a \`.css\` or \`.scss\` file

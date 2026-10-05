@@ -1,12 +1,39 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { env } from '../../../src/env.mts';
 import { DEBATE_PERSONAS, personaModel, parseStories, parseStance, runDebate, DebateError, type DebateDeps } from '../../../src/prd/debate.mts';
 import type { Task } from '../../../src/types/index.mts';
 
 describe('personaModel', () => {
+  // Pin the model env for this test so it does not depend on the local .env
+  // (which may set the planner and coder to the same model).
+  const keys = ['PLANNER_MODEL', 'CODER_MODEL', 'DEBATE_ARCHITECT_MODEL', 'DEBATE_SME_MODEL', 'DEBATE_SCRUM_MODEL', 'DEBATE_DEV_MODEL'] as const;
+  const target = env as Record<string, unknown>;
+  const saved: Record<string, unknown> = {};
+
+  beforeEach(() => {
+    for (const key of keys) {
+      saved[key] = target[key];
+      delete target[key];
+    }
+    target['PLANNER_MODEL'] = 'planner-model';
+    target['CODER_MODEL'] = 'coder-model';
+  });
+
+  afterEach(() => {
+    for (const key of keys) {
+      if (saved[key] === undefined) {
+        delete target[key];
+      } else {
+        target[key] = saved[key];
+      }
+    }
+  });
+
   it('maps SA and SME to the planner model, Scrum and Dev to the coder model (defaults)', () => {
-    expect(personaModel('solution_architect')).toBe(personaModel('sme'));
-    expect(personaModel('scrum_master')).toBe(personaModel('developer'));
-    expect(personaModel('solution_architect')).not.toBe(personaModel('developer'));
+    expect(personaModel('solution_architect')).toBe('planner-model');
+    expect(personaModel('sme')).toBe('planner-model');
+    expect(personaModel('scrum_master')).toBe('coder-model');
+    expect(personaModel('developer')).toBe('coder-model');
   });
   it('exposes the four personas', () => {
     expect([...DEBATE_PERSONAS]).toEqual(['scrum_master', 'solution_architect', 'sme', 'developer']);

@@ -1,6 +1,25 @@
 # ODA Reliability and Standards Plan
 
 **Date:** 2026-10-05
+
+## Status (2026-10-05, branch `feature/global-standards-and-ts-version`)
+
+| Item | Status |
+|---|---|
+| 0.1 Rotate exposed key | **Open (Davis)** |
+| 0.2 Commit WIP | Done (`ddfb651`) |
+| 0.3 `tsc` errors | Done: 16 → 0. Tools moved from zod to TypeBox via `src/tools/define-tool.mts` (also 4.4 for tools; `env.mts` still uses zod) |
+| 0.4 Lint script | Done (`eslint src`) |
+| 1.1 Per-call timeout | Done: `CALL_TIMEOUT_SECONDS`, deadline-aware retry with jitter, real HTTP abort via a tracking `fetch` (ChatOllama ignores `signal` on a silent connection — verified) |
+| 1.2 Quota pause | Done: `QuotaExceededError`; the loop rethrows it and the scheduler puts the task back to pending, saves state, and pauses (`QUOTA_PAUSE_MINUTES`, capped by `QUOTA_MAX_PAUSE_MINUTES`) |
+| 1.3 Empty iterations | Done: worker or reviewer errors skip lint and review and keep the last real review; timeout and lint feedback carry the last review's issues forward |
+| 1.6 (part) | `--max-iter` validated (1–50) |
+| 2.1 Dependency preflight | Done: `src/deps/`, run before each batch, `--no-dep-upgrade`. Verified on a copy of `D:\temp\4`: Angular 20→22, mongodb, auth0 upgraded; typescript pinned 6.0.3 (7.0.2 breaks lint) |
+| 2.3 Reviewer parsing | Done: last real `DECISION` line wins; issues read after it |
+| 3.10 Crashing task | Done: stamped finished, `task_failed` emitted, logged |
+| 3.4 (part) | State-save failures are now logged |
+| 5.4 `edit_file` `$` | Done |
+| Everything else | Not started |
 **Evidence:** the 19-hour run log from `D:\temp\4\.oda.log` and two code reviews of this repo. The core claims were spot-checked against the source.
 
 ## Why

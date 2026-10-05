@@ -1,11 +1,11 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 import { unlink } from 'node:fs/promises';
 import { validatePath } from './path-validator.mts';
 
 export function createFileDeleteTool(workingDirectory: string): StructuredTool {
-  return tool(
+  return defineTool(
     async ({ path }: { path: string }): Promise<string> => {
       try {
         const resolved = validatePath(path, workingDirectory);
@@ -19,8 +19,8 @@ export function createFileDeleteTool(workingDirectory: string): StructuredTool {
     {
       name: 'delete_file',
       description: 'Delete a file at the given relative path',
-      schema: z.object({
-        path: z.string().describe('Relative path to the file to delete'),
+      schema: Type.Object({
+        path: Type.String({ description: 'Relative path to the file to delete' }),
       }),
     },
   );

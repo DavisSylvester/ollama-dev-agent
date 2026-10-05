@@ -21,6 +21,21 @@ const envSchema = z.object({
   // Wall-clock cap per worker iteration (seconds). Independent of step count —
   // catches a single hung tool call that would otherwise consume the whole run.
   MAX_ITERATION_SECONDS: z.coerce.number().int().min(30).max(1800).default(420),
+  // Cap on a single model request (seconds). A hung call is aborted at the HTTP
+  // level and retried, instead of silently consuming the whole iteration.
+  CALL_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(1800).default(180),
+  // When the provider rejects calls for quota/rate-limit reasons, the run saves
+  // state and waits this long before retrying the affected tasks...
+  QUOTA_PAUSE_MINUTES: z.coerce.number().min(0).max(240).default(15),
+  // ...for at most this long in total, then stops cleanly so it can be resumed.
+  QUOTA_MAX_PAUSE_MINUTES: z.coerce.number().min(0).max(1440).default(360),
+  // Before each batch of tasks, upgrade outdated direct dependencies to their
+  // newest release, keeping only upgrades that don't make the gate worse.
+  // Only the literal "false" / "0" turns it off.
+  DEP_UPGRADE: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
   REVIEWER_MAX_STEPS: z.coerce.number().int().min(3).max(20).default(8),
   PLANNER_MAX_STEPS: z.coerce.number().int().min(5).max(50).default(15),
   // Web-search-enabled planning. Disable for a fast single-shot PRD call.

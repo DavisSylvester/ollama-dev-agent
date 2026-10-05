@@ -161,3 +161,25 @@ describe('parseReviewDecision — pre-completion checklist', () => {
     expect(result.checklist).toEqual([]);
   });
 });
+
+describe('parseReviewDecision — final decision wins', () => {
+  it('ignores an echoed template line and uses the real decision', () => {
+    const reply = 'Format: DECISION: SHIP | REVISE\n\nDECISION: REVISE\nISSUES:\n- missing test';
+    const result = parseReviewDecision(reply);
+    expect(result.decision).toBe('revise');
+    expect(result.issues).toEqual(['missing test']);
+  });
+
+  it('uses the last decision when the reviewer changes its mind', () => {
+    const reply = 'DECISION: SHIP\n\nOn reflection the route has no auth.\n\nDECISION: REVISE\nISSUES:\n- add auth guard';
+    expect(parseReviewDecision(reply).decision).toBe('revise');
+  });
+
+  it('still ships a plain SHIP reply', () => {
+    expect(parseReviewDecision('All good.\n\nDECISION: SHIP').decision).toBe('ship');
+  });
+
+  it('accepts a bolded decision', () => {
+    expect(parseReviewDecision('**DECISION: SHIP**').decision).toBe('ship');
+  });
+});

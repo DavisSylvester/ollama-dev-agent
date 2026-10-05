@@ -6,7 +6,8 @@ import { RalphLoop } from '../../../src/ralph/loop.mts';
 import type { Task, ReviewDecision } from '../../../src/types/index.mts';
 import { REACT_TIMEOUT_SENTINEL } from '../../../src/models/react-agent.mts';
 import type { RalphRunnerDeps } from '../../../src/ralph/loop.mts';
-import { toRelativePaths } from '../../../src/ralph/loop.mts';
+import { CARRIED_REVIEW_HEADING, toRelativePaths, withCarriedReview } from '../../../src/ralph/loop.mts';
+import { QuotaExceededError } from '../../../src/models/ollama-client.mts';
 import type { LintResult } from '../../../src/tools/run-linter.mts';
 import type { StructuredTool } from '@langchain/core/tools';
 
@@ -194,23 +195,26 @@ describe('RalphLoop.runTask — max iterations', () => {
 // ---------------------------------------------------------------------------
 
 describe('RalphLoop.runTask — worker throws', () => {
-  it('still calls the reviewer after a worker exception', async () => {
+  it('skips lint and the reviewer after a worker exception', async () => {
     const task = makeTask();
-    let reviewerCalled = false;
+    let reviewerCalls = 0;
+    let lintCalls = 0;
 
     const deps: RalphRunnerDeps = {
-      lintFn: makeCleanLint(),
+      lintFn: async () => { lintCalls++; return { clean: true, output: '' }; },
       workerFn: async () => { throw new Error('model crashed'); },
-      reviewerFn: async () => { reviewerCalled = true; return makeShipDecision(); },
+      reviewerFn: async () => { reviewerCalls++; return makeShipDecision(); },
     };
 
-    // The reviewer SHIPs even after the worker error → task is complete in 1 iteration
+    // Nothing was produced, so there is nothing to lint or review: every
+    // iteration is spent and the task fails without the reviewer ever running.
     const result = await loop.runTask(task, NO_TOOLS, undefined, deps);
-    expect(result).toBe('complete');
-    expect(reviewerCalled).toBe(true);
+    expect(result).toBe('failed');
+    expect(reviewerCalls).toBe(0);
+    expect(lintCalls).toBe(0);
   });
 
-  it('loops to iteration 2 when the reviewer REVISEs after a worker error', async () => {
+  it('recovers on the next iteration after a worker error', async () => {
     const task = makeTask();
     let workerCalls = 0;
     let reviewerCalls = 0;
@@ -222,16 +226,57 @@ describe('RalphLoop.runTask — worker throws', () => {
         if (workerCalls === 1) throw new Error('model crashed');
         return 'recovered';
       },
-      reviewerFn: async () => {
-        reviewerCalls++;
-        // REVISE on first review (after worker error), SHIP on second
-        return reviewerCalls === 1 ? makeReviseDecision() : makeShipDecision();
-      },
+      reviewerFn: async () => { reviewerCalls++; return makeShipDecision(); },
     };
 
     const result = await loop.runTask(task, NO_TOOLS, undefined, deps);
     expect(result).toBe('complete');
     expect(workerCalls).toBe(2);
+    expect(reviewerCalls).toBe(1);
+  });
+
+  it('rethrows a quota error from the worker instead of failing the task', async () => {
+    const task = makeTask();
+    let workerCalls = 0;
+
+    const deps: RalphRunnerDeps = {
+      lintFn: makeCleanLint(),
+      workerFn: async () => { workerCalls++; throw new Error('You reached your Pro 5-hour limit.'); },
+      reviewerFn: async () => makeShipDecision(),
+    };
+
+    await expect(loop.runTask(task, NO_TOOLS, undefined, deps)).rejects.toBeInstanceOf(QuotaExceededError);
+    expect(workerCalls).toBe(1);
+    expect(task.status).not.toBe('failed');
+  });
+
+  it('rethrows a quota error from the reviewer instead of recording a REVISE', async () => {
+    const task = makeTask();
+    const deps: RalphRunnerDeps = {
+      lintFn: makeCleanLint(),
+      workerFn: async () => 'done',
+      reviewerFn: async () => { throw new Error('429 Too Many Requests'); },
+    };
+
+    await expect(loop.runTask(task, NO_TOOLS, undefined, deps)).rejects.toBeInstanceOf(QuotaExceededError);
+  });
+
+  it('does not run more iterations after a reviewer error than the cap allows', async () => {
+    const task = makeTask();
+    let reviewerCalls = 0;
+    const deps: RalphRunnerDeps = {
+      lintFn: makeCleanLint(),
+      workerFn: async () => 'done',
+      reviewerFn: async () => {
+        reviewerCalls++;
+        if (reviewerCalls === 1) throw new Error('reviewer parse failure');
+        return makeShipDecision();
+      },
+    };
+
+    const result = await loop.runTask(task, NO_TOOLS, undefined, deps);
+    expect(result).toBe('complete');
+    expect(reviewerCalls).toBe(2);
   });
 
   it('fires onWorkerComplete even when the worker throws', async () => {
@@ -756,5 +801,35 @@ describe('toRelativePaths', () => {
 
   it('leaves text without the working dir untouched', () => {
     expect(toRelativePaths('a plain message', '/some/wd')).toBe('a plain message');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Carrying the last real review across iterations that end without one
+// ---------------------------------------------------------------------------
+
+describe('withCarriedReview', () => {
+  const review = 'DECISION: REVISE\nISSUES:\n- bump typescript to ^7.0.2';
+  const timedOut = '## ⚠ Worker Timed Out\nretry';
+  const lintFailed = '## 🔴 ESLint Validation Failed\nfix lint';
+
+  it('appends the last real review to timeout or lint feedback', () => {
+    const out = withCarriedReview(timedOut, review);
+    expect(out).toContain('## ⚠ Worker Timed Out');
+    expect(out).toContain(CARRIED_REVIEW_HEADING);
+    expect(out).toContain('bump typescript to ^7.0.2');
+  });
+
+  it('keeps carrying the same review through consecutive timeouts without nesting', () => {
+    const first = withCarriedReview(timedOut, review);
+    const second = withCarriedReview(lintFailed, first);
+    expect(second.split(CARRIED_REVIEW_HEADING)).toHaveLength(2);
+    expect(second).toContain('bump typescript to ^7.0.2');
+    expect(second).not.toContain('## ⚠ Worker Timed Out');
+  });
+
+  it('adds nothing when the previous feedback was not a review', () => {
+    expect(withCarriedReview(timedOut, lintFailed)).toBe(timedOut);
+    expect(withCarriedReview('lint', '')).toBe('lint');
   });
 });

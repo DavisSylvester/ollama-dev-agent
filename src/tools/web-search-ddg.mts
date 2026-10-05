@@ -1,6 +1,6 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 
 interface SearchResult {
   title: string;
@@ -45,7 +45,7 @@ function parseDDGResults(html: string, maxResults: number): SearchResult[] {
 }
 
 export function createWebSearchDDGTool(): StructuredTool {
-  return tool(
+  return defineTool(
     async ({
       query,
       max_results,
@@ -81,9 +81,9 @@ export function createWebSearchDDGTool(): StructuredTool {
     {
       name: 'web_search_ddg',
       description: 'Search the web using DuckDuckGo and return titles, URLs, and snippets',
-      schema: z.object({
-        query: z.string().describe('Search query'),
-        max_results: z.number().default(5).describe('Maximum number of results to return'),
+      schema: Type.Object({
+        query: Type.String({ description: 'Search query' }),
+        max_results: Type.Number({ default: 5, description: 'Maximum number of results to return' }),
       }),
     },
   );

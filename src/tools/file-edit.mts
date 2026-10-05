@@ -1,10 +1,10 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 import { validatePath } from './path-validator.mts';
 
 export function createFileEditTool(workingDirectory: string): StructuredTool {
-  return tool(
+  return defineTool(
     async ({
       path,
       old_text,
@@ -25,7 +25,7 @@ export function createFileEditTool(workingDirectory: string): StructuredTool {
         if (!original.includes(old_text)) {
           return 'Text not found in file';
         }
-        const updated = original.replace(old_text, new_text);
+        const updated = original.replace(old_text, () => new_text);
         await Bun.write(resolved, updated);
         return `File edited: ${path}`;
       } catch (err) {
@@ -36,10 +36,10 @@ export function createFileEditTool(workingDirectory: string): StructuredTool {
     {
       name: 'edit_file',
       description: 'Replace the first occurrence of exact text in a file with new text',
-      schema: z.object({
-        path: z.string().describe('Relative path to the file to edit'),
-        old_text: z.string().describe('Exact text to replace'),
-        new_text: z.string().describe('Replacement text'),
+      schema: Type.Object({
+        path: Type.String({ description: 'Relative path to the file to edit' }),
+        old_text: Type.String({ description: 'Exact text to replace' }),
+        new_text: Type.String({ description: 'Replacement text' }),
       }),
     },
   );

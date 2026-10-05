@@ -1,6 +1,6 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 import { execa } from 'execa';
 
 export interface LintResult {
@@ -78,7 +78,7 @@ export async function runLint(
 }
 
 export function createRunLinterTool(workingDirectory: string): StructuredTool {
-  return tool(
+  return defineTool(
     async ({ fix }: { fix: boolean }): Promise<string> => {
       const result = await runLint(workingDirectory, fix);
       return result.output;
@@ -86,8 +86,8 @@ export function createRunLinterTool(workingDirectory: string): StructuredTool {
     {
       name: 'run_linter',
       description: 'Run ESLint on the project source files, optionally with --fix to auto-correct issues',
-      schema: z.object({
-        fix: z.boolean().default(false).describe('Pass --fix to auto-correct fixable lint errors'),
+      schema: Type.Object({
+        fix: Type.Boolean({ default: false, description: 'Pass --fix to auto-correct fixable lint errors' }),
       }),
     },
   );

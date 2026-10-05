@@ -6,7 +6,8 @@ import {
   ToolMessage,
   type AIMessage,
 } from '@langchain/core/messages';
-import { withOllamaRetry } from './ollama-client.mts';
+import { ChatOllama } from '@langchain/ollama';
+import { abortModelRequests, DeadlineExceededError, withOllamaRetry } from './ollama-client.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 import { DateTime } from 'luxon';
@@ -16,15 +17,28 @@ import { DateTime } from 'luxon';
 // transient Ollama timeouts / connection drops don't fail the whole task.
 // Detection + backoff live in withOllamaRetry (ollama-client) so the worker and
 // reviewer share one source of truth for what counts as a transient error.
+// Every call is capped (CALL_TIMEOUT_SECONDS) and bounded by the iteration
+// deadline; a timed-out request is cancelled at the HTTP level.
 // ---------------------------------------------------------------------------
 
 async function invokeWithRetry(
   model: BaseChatModel,
+  baseModel: BaseChatModel,
   messages: Parameters<BaseChatModel['invoke']>[0],
+  deadlineMs: number,
+  label: string = 'worker.invoke',
+  maxRetries?: number,
 ): Promise<AIMessage> {
   return withOllamaRetry(
     async () => (await model.invoke(messages)) as AIMessage,
-    { label: 'worker.invoke' },
+    {
+      label,
+      deadlineMs,
+      ...(maxRetries !== undefined ? { maxRetries } : {}),
+      onCallTimeout: () => {
+        if (baseModel instanceof ChatOllama) abortModelRequests(baseModel);
+      },
+    },
   );
 }
 
@@ -56,6 +70,7 @@ export async function runReactAgent(
   userPrompt: string,
   maxSteps?: number,
   onToolCall?: (toolName: string, args: Record<string, unknown>) => void,
+  onToolResult?: (toolName: string, args: Record<string, unknown>, result: string) => void,
 ): Promise<string> {
   const limit = maxSteps ?? env.MAX_REACT_STEPS;
 
@@ -73,18 +88,43 @@ export async function runReactAgent(
     new HumanMessage(userPrompt),
   ];
 
+  // Wall-clock budget — independent of step count. Catches a single hung tool
+  // call (e.g. a server start) that would otherwise consume the whole run.
+  const startMs = DateTime.utc().toMillis();
+  const deadlineMs = startMs + env.MAX_ITERATION_SECONDS * 1000;
+
   // Summarizer for context compaction — uses the UNBOUND model (no tools) so it
-  // can't try to call tools while summarizing.
+  // can't try to call tools while summarizing. One capped attempt, no retry:
+  // compactConversation falls back to a deterministic summary on failure.
   const summarize = async (text: string): Promise<string> => {
-    const res = (await model.invoke([
-      new SystemMessage(
-        'Summarize this agent work-log concisely as terse bullet points. Capture: ' +
-        'files created/modified, key decisions, test/lint results, and any unresolved ' +
-        'errors. This replaces older context to save tokens — preserve facts, drop prose.',
-      ),
-      new HumanMessage(text.slice(0, 12000)),
-    ])) as AIMessage;
+    const res = await invokeWithRetry(
+      model,
+      model,
+      [
+        new SystemMessage(
+          'Summarize this agent work-log concisely as terse bullet points. Capture: ' +
+          'files created/modified, key decisions, test/lint results, and any unresolved ' +
+          'errors. This replaces older context to save tokens — preserve facts, drop prose.',
+        ),
+        new HumanMessage(text.slice(0, 12000)),
+      ],
+      deadlineMs,
+      'worker.summarize',
+      0,
+    );
     return extractContent(res);
+  };
+
+  const wallClockTimeout = (step: number): string => {
+    const uniqueTools = [...new Set(toolCallCounts.keys())];
+    logger.warn(
+      { step, elapsedSeconds: Math.round((DateTime.utc().toMillis() - startMs) / 1000), maxSeconds: env.MAX_ITERATION_SECONDS },
+      'react_agent.wall_clock_timeout',
+    );
+    return (
+      `${REACT_TIMEOUT_SENTINEL} (wall-clock ${env.MAX_ITERATION_SECONDS}s exceeded) ` +
+      `without a final answer. Tools attempted: ${uniqueTools.join(', ') || 'none'}.`
+    );
   };
 
   // Per-run call count per tool name
@@ -97,22 +137,9 @@ export async function runReactAgent(
   let emptyRetries = 0;
   const MAX_EMPTY_RETRIES = 2;
 
-  // Wall-clock budget — independent of step count. Catches a single hung tool
-  // call (e.g. a server start) that would otherwise consume the whole run.
-  const startMs = DateTime.utc().toMillis();
-  const deadlineMs = startMs + env.MAX_ITERATION_SECONDS * 1000;
-
   for (let step = 0; step < limit; step++) {
     if (DateTime.utc().toMillis() >= deadlineMs) {
-      const uniqueTools = [...new Set(toolCallCounts.keys())];
-      logger.warn(
-        { step, elapsedSeconds: Math.round((DateTime.utc().toMillis() - startMs) / 1000), maxSeconds: env.MAX_ITERATION_SECONDS },
-        'react_agent.wall_clock_timeout',
-      );
-      return (
-        `${REACT_TIMEOUT_SENTINEL} (wall-clock ${env.MAX_ITERATION_SECONDS}s exceeded) ` +
-        `without a final answer. Tools attempted: ${uniqueTools.join(', ') || 'none'}.`
-      );
+      return wallClockTimeout(step);
     }
     // Context compaction — when the conversation approaches the context window,
     // summarize older turns (at a clean tool-call boundary) so a long iteration
@@ -128,7 +155,15 @@ export async function runReactAgent(
 
     logger.debug({ step, totalSteps: limit }, 'react_agent.step');
 
-    const aiMessage = await invokeWithRetry(modelWithTools as BaseChatModel, messages);
+    let aiMessage: AIMessage;
+    try {
+      aiMessage = await invokeWithRetry(modelWithTools as BaseChatModel, model, messages, deadlineMs);
+    } catch (err) {
+      // Out of time before (or between) model attempts: report a wall-clock
+      // timeout like the top-of-loop check, not a worker error.
+      if (err instanceof DeadlineExceededError) return wallClockTimeout(step);
+      throw err;
+    }
     messages.push(aiMessage);
 
     const toolCalls = aiMessage.tool_calls;
@@ -230,6 +265,7 @@ export async function runReactAgent(
         toolResult = `Error executing tool "${toolName}": ${message}`;
         logger.warn({ step, toolName, error: message }, 'react_agent.tool_error');
       }
+      onToolResult?.(toolName, toolArgs, toolResult);
 
       // Store read_file results in cache for deduplication on future calls
       if (toolName === 'read_file' && typeof toolArgs['path'] === 'string') {

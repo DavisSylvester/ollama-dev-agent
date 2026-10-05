@@ -1,12 +1,12 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { validatePath } from './path-validator.mts';
 
 export function createFileWriteTool(workingDirectory: string): StructuredTool {
-  return tool(
+  return defineTool(
     async ({ path, content }: { path: string; content: string }): Promise<string> => {
       try {
         const resolved = validatePath(path, workingDirectory);
@@ -21,9 +21,9 @@ export function createFileWriteTool(workingDirectory: string): StructuredTool {
     {
       name: 'write_file',
       description: 'Write content to a file at the given relative path, creating parent directories as needed',
-      schema: z.object({
-        path: z.string().describe('Relative path to write'),
-        content: z.string().describe('Content to write to the file'),
+      schema: Type.Object({
+        path: Type.String({ description: 'Relative path to write' }),
+        content: Type.String({ description: 'Content to write to the file' }),
       }),
     },
   );

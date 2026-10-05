@@ -4,7 +4,8 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createChatModel, resolveCoderModel } from '../models/index.mts';
 import { runReactAgent } from '../models/index.mts';
-import { buildWorkerPrompt, resolveLatestTypeScriptVersion } from '../prd/index.mts';
+import { buildWorkerPrompt } from '../prd/index.mts';
+import { getDependencyReport, summarizeForPrompt } from '../deps/dependency-preflight.mts';
 import { loadKnowledgeBase, categorizeTask, formatForPrompt } from '../knowledge-base/index.mts';
 import { env } from '../env.mts';
 
@@ -58,6 +59,7 @@ interface WorkerParams {
   readonly activityLog: string;
   readonly tools: StructuredTool[];
   readonly onToolCall?: (toolName: string, args: Record<string, unknown>) => void;
+  readonly onToolResult?: (toolName: string, args: Record<string, unknown>, result: string) => void;
   readonly onOutput?: (chunk: string) => void;
 }
 
@@ -71,14 +73,15 @@ export async function runWorker(params: WorkerParams): Promise<string> {
     activityLog,
     tools,
     onToolCall,
+    onToolResult,
   } = params;
 
-  const [directoryListing, availablePackages, kb, latestTypeScriptVersion] = await Promise.all([
+  const [directoryListing, availablePackages, kb] = await Promise.all([
     buildDirectoryListing(workingDirectory),
     readAvailablePackages(workingDirectory),
     loadKnowledgeBase(),
-    resolveLatestTypeScriptVersion(),
   ]);
+  const dependencySummary = summarizeForPrompt(getDependencyReport(workingDirectory));
 
   // Feed prior known issues + resolutions (most relevant category first) so the
   // worker can avoid repeating errors we have already solved.
@@ -94,7 +97,7 @@ export async function runWorker(params: WorkerParams): Promise<string> {
     directoryListing,
     availablePackages,
     knowledgeBase,
-    latestTypeScriptVersion,
+    dependencySummary,
   );
 
   const userPrompt =
@@ -112,5 +115,6 @@ export async function runWorker(params: WorkerParams): Promise<string> {
     userPrompt,
     env.MAX_REACT_STEPS,
     onToolCall,
+    onToolResult,
   );
 }

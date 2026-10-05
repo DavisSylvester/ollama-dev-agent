@@ -411,7 +411,19 @@ Options:
   --no-research                 Disable web-search planning (fast single-shot PRD)
   --planner-max-steps <number>  Override the planner research step budget
   --max-react-steps <number>    Override the worker ReAct step budget
+  --fresh                       Ignore saved state and start a clean run (no resume)
+  --no-dep-upgrade              Skip the automatic dependency upgrade before each batch
 ```
+
+**Dependency versions** are managed by oda, not by the model. Before each batch of
+tasks it upgrades every outdated direct dependency to its newest release, runs the
+project's own typecheck, lint and tests, and keeps only upgrades that make nothing
+worse. A group that breaks is retried at the newest release of its current major,
+or pinned. Every decision is written to `docs/DEPENDENCIES.md` in the target project.
+
+**Timeouts and quota:** each model call is capped at `CALL_TIMEOUT_SECONDS` and
+cancelled at the HTTP level when it runs over. A "usage limit" / 429 response pauses
+the run (state saved) for `QUOTA_PAUSE_MINUTES` instead of failing tasks.
 
 CLI flags override the corresponding `.env` values for that run. The Ollama Cloud
 API key is **never** a CLI argument — it always comes from `OLLAMA_API_KEY` in the

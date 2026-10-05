@@ -93,20 +93,28 @@ describe('formatTypeScriptVersionRule', () => {
   });
 });
 
-describe('prompts — TypeScript version rule', () => {
+// Version enforcement moved out of the prompts into oda's dependency preflight
+// (src/deps): the reviewer used to REVISE over a typescript pin the worker never
+// bumped, so tasks could not pass. The prompts now state the policy and facts.
+describe('prompts — dependency version policy', () => {
+  const pinned = 'Pinned below latest by oda, deliberately: `typescript` 6.2.1 (latest 7.0.2: typecheck failures rose).';
 
-  it('puts the resolved version in the worker prompt', () => {
-    const prompt = buildWorkerPrompt(TASK, 1, '', 'Feature', '/dir', '', '', '', '', '9.1.2');
-    expect(prompt).toContain('bun add -d typescript@9.1.2');
+  it('tells the worker versions are managed and not to change them', () => {
+    const prompt = buildWorkerPrompt(TASK, 1, '', 'Feature', '/dir', '', '', '', '', pinned);
+    expect(prompt).toContain('Dependency versions are managed by oda');
+    expect(prompt).toContain('Do **not** change the version of a package already listed');
+    expect(prompt).toContain('`typescript` 6.2.1 (latest 7.0.2');
   });
 
-  it('tells the reviewer to REVISE a typescript pin below the resolved version', () => {
-    const prompt = buildReviewerPrompt(TASK, 'done', 'Feature', [], '9.1.2');
-    expect(prompt).toContain('pins `typescript` below `9.1.2`');
+  it('tells the reviewer not to REVISE over versions, and why a pin exists', () => {
+    const prompt = buildReviewerPrompt(TASK, 'done', 'Feature', [], pinned);
+    expect(prompt).toContain('Do **NOT** REVISE over dependency versions');
+    expect(prompt).toContain('`typescript` 6.2.1 (latest 7.0.2');
+    expect(prompt).not.toContain('pins `typescript` below');
   });
 
-  it('falls back to "the newest stable release" in the reviewer without a version', () => {
+  it('still states the policy when no preflight report exists yet', () => {
     const prompt = buildReviewerPrompt(TASK, 'done', 'Feature');
-    expect(prompt).toContain('pins `typescript` below the newest stable release');
+    expect(prompt).toContain('docs/DEPENDENCIES.md');
   });
 });

@@ -1,7 +1,9 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 import { execa } from 'execa';
+import { checkCommand } from '../shell/command-check.mts';
+import { getShell, shellArgv, SYSTEM_PROBE } from '../shell/resolve-shell.mts';
 
 interface ShellResult {
   stdout: string;
@@ -20,7 +22,7 @@ function isServerStartCommand(command: string): boolean {
 }
 
 export function createShellExecTool(workingDirectory: string): StructuredTool {
-  return tool(
+  return defineTool(
     async ({
       command,
       timeout_ms,
@@ -47,10 +49,37 @@ export function createShellExecTool(workingDirectory: string): StructuredTool {
         } satisfies ShellResult);
       }
 
+      // Run in the one shell resolved for this OS (Git Bash / PowerShell on
+      // Windows, bash / sh elsewhere) — never whatever execa's shell:true picks.
+      const resolved = getShell();
+      if (!resolved.ok) {
+        return JSON.stringify({ stdout: '', stderr: `Not run: ${resolved.error}`, exitCode: 1 } satisfies ShellResult);
+      }
+      const shell = resolved.shell;
+
+      // Guard: the command must be written for this shell and only call
+      // programs that exist here. Otherwise explain instead of running it.
+      const problems = checkCommand(command, shell, {
+        platform: process.platform,
+        cwd: workingDirectory,
+        which: SYSTEM_PROBE.which,
+        exists: SYSTEM_PROBE.exists,
+      });
+      if (problems.length > 0) {
+        return JSON.stringify({
+          stdout: '',
+          stderr:
+            `Not run: this command won't work in ${shell.name} on ${process.platform}.\n` +
+            problems.map((p) => `- ${p}`).join('\n') +
+            `\nRewrite it for ${shell.name}, or use the dedicated tools (read_file, write_file, list_directory, run_tests, install_package).`,
+          exitCode: 1,
+        } satisfies ShellResult);
+      }
+
       try {
-        const proc = await execa(command, {
-          shell: true,
+        const proc = await execa(shell.path, shellArgv(shell, command), {
           cwd: workingDirectory,
+          windowsHide: true,
           timeout: timeout_ms ?? 60000,
           killSignal: 'SIGKILL', // hard-kill on timeout so children don't linger
           reject: false,
@@ -71,14 +100,12 @@ export function createShellExecTool(workingDirectory: string): StructuredTool {
     {
       name: 'shell_exec',
       description:
-        'Execute a shell command in the working directory and return stdout, stderr, and exit code',
-      schema: z.object({
-        command: z.string().describe('Shell command to execute'),
-        timeout_ms: z
-          .number()
-          .default(60000)
-          .optional()
-          .describe('Timeout in milliseconds (default: 60000)'),
+        'Execute a shell command in the working directory and return stdout, stderr, and exit code. ' +
+        'Commands run in the shell oda resolved for this OS (see the prompt); a command written for a ' +
+        'different shell, or one that calls a program not installed here, is refused with the reason.',
+      schema: Type.Object({
+        command: Type.String({ description: 'Shell command to execute' }),
+        timeout_ms: Type.Number({ default: 60000, description: 'Timeout in milliseconds (default: 60000)' }),
       }),
     },
   );

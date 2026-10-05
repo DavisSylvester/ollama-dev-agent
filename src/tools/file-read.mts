@@ -1,10 +1,10 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 import { validatePath } from './path-validator.mts';
 
 export function createFileReadTool(workingDirectory: string): StructuredTool {
-  return tool(
+  return defineTool(
     async ({ path }: { path: string }): Promise<string> => {
       try {
         const resolved = validatePath(path, workingDirectory);
@@ -22,8 +22,8 @@ export function createFileReadTool(workingDirectory: string): StructuredTool {
     {
       name: 'read_file',
       description: 'Read the contents of a file at the given relative path',
-      schema: z.object({
-        path: z.string().describe('Relative path to read'),
+      schema: Type.Object({
+        path: Type.String({ description: 'Relative path to read' }),
       }),
     },
   );

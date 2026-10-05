@@ -1,6 +1,6 @@
-import { tool } from '@langchain/core/tools';
+import { Type } from '@sinclair/typebox';
 import type { StructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { defineTool } from './define-tool.mts';
 import { glob } from 'glob';
 import { join } from 'node:path';
 import { validatePath } from './path-validator.mts';
@@ -14,7 +14,7 @@ interface GrepMatch {
 }
 
 export function createGrepSearchTool(workingDirectory: string): StructuredTool {
-  return tool(
+  return defineTool(
     async ({
       pattern,
       path,
@@ -72,14 +72,12 @@ export function createGrepSearchTool(workingDirectory: string): StructuredTool {
       name: 'grep_search',
       description:
         'Recursively search files for a regex pattern, returning matching file, line number, and content',
-      schema: z.object({
-        pattern: z.string().describe('Regex pattern to search for'),
-        path: z.string().default('.').describe('Directory to search in, relative to working dir'),
-        file_glob: z
-          .string()
-          .optional()
-          .describe('Glob pattern to filter files (default: **/*)')
-,
+      schema: Type.Object({
+        pattern: Type.String({ description: 'Regex pattern to search for' }),
+        path: Type.String({ default: '.', description: 'Directory to search in, relative to working dir' }),
+        file_glob: Type.Optional(
+          Type.String({ description: 'Glob pattern to filter files (default: **/*)' }),
+        ),
       }),
     },
   );
