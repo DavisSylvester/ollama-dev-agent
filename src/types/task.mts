@@ -25,6 +25,9 @@ export interface Task {
   failureReason?: string;
   // For a blocked task: the failed/blocked tasks it was waiting on.
   blockedBy?: string[];
+  // How many times this task finished in an isolated worktree but its changes
+  // could not be applied to the real tree. Caps the re-runs.
+  isolationConflicts?: number;
 }
 
 // blocked = never ran because a task it depends on failed (or is itself blocked).
