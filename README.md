@@ -1,5 +1,15 @@
 # ODA — Ollama Dev Agent
 
+> **Deprecated (2026-10-06).** ODA has been merged with silo into **kavix**
+> (`DavisSylvester/kavix-agent`, a private repository for now), which keeps
+> ODA's model-call layer and planning pipeline (research, sizing, the persona
+> debate, the worker → reviewer loop) and ships as one binary per platform.
+> This repository is archived and gets no further changes.
+>
+> If you have access to kavix: install it from its latest release, then run
+> `kavix migrate --from <this checkout>` to import your `.env` settings and
+> the lessons in `.ai/knowledge-base/` (a dry run first; `--apply` imports).
+
 An autonomous, self-healing code generation agent that runs entirely locally using [Ollama](https://ollama.com). Give it a feature prompt, approve the generated plan, and it implements, tests, and reviews the code iteratively until everything passes.
 
 ---
