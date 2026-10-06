@@ -318,12 +318,16 @@ export function buildWorkerPrompt(
   availablePackages: string = '',
   knowledgeBase: string = '',
   dependencySummary: string = '',
+  playbooks: string = '',
 ): string {
   const stepBudget = env.MAX_REACT_STEPS;
   const explorationBudget = Math.min(3, Math.floor(stepBudget * 0.15));
 
+  // The domain playbook (if any) goes before the lessons: it is the standing
+  // rulebook for this kind of task, the lessons are past corrections.
   const knowledgeBaseSection =
-    knowledgeBase.trim().length > 0 ? `\n${knowledgeBase}\n` : '';
+    (playbooks.trim().length > 0 ? `\n${playbooks}\n` : '') +
+    (knowledgeBase.trim().length > 0 ? `\n${knowledgeBase}\n` : '');
 
   const feedbackSection =
     iteration > 1 && reviewerFeedback.trim().length > 0
@@ -609,7 +613,10 @@ export function buildReviewerPrompt(
   featureName: string,
   fileContents: readonly LoadedFile[] = [],
   dependencySummary: string = '',
+  playbooks: string = '',
 ): string {
+  // Review against the same domain playbook the worker followed.
+  const playbookSection = playbooks.trim().length > 0 ? `\n${playbooks}\n` : '';
   const filesSection =
     fileContents.length > 0
       ? `\n## Implementation Files\n\n` +
@@ -633,7 +640,7 @@ You have NO tools available. All implementation files you need are embedded belo
 **Description**: ${task.description}
 **Acceptance Criteria**: ${task.acceptanceCriteria}
 **Test Command**: \`${task.testCommand}\`
-
+${playbookSection}
 ## Worker's Implementation Report
 
 ${workerOutput}

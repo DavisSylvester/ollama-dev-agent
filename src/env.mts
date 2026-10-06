@@ -75,6 +75,11 @@ const envSchema = z.object({
   MAX_OUTPUT_TOKENS: z.coerce.number().int().min(1024).max(262144).default(16384),
   // Most characters of knowledge-base lessons put in each worker prompt.
   KB_PROMPT_MAX_CHARS: z.coerce.number().int().min(0).max(200000).default(8000),
+  // Shared domain playbooks (Markdown per task domain). Defaults to
+  // ~/.ollama-agents/playbooks; a project's playbooks/ folder overrides by name.
+  PLAYBOOKS_DIR: z.string().optional(),
+  // Most characters of playbook text in one prompt; 0 turns playbooks off.
+  PLAYBOOK_MAX_CHARS: z.coerce.number().int().min(0).max(100000).default(6000),
   // When the provider rejects calls for quota/rate-limit reasons, the run saves
   // state and waits this long before retrying the affected tasks...
   QUOTA_PAUSE_MINUTES: z.coerce.number().min(0).max(240).default(15),

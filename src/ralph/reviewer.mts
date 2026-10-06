@@ -3,6 +3,7 @@ import { createChatModel, ThinkingBudgetExceededError, watchModel, withOllamaRet
 import { SystemMessage, HumanMessage, type AIMessage } from '@langchain/core/messages';
 import { buildReviewerPrompt } from '../prd/index.mts';
 import { getDependencyReport, summarizeForPrompt } from '../deps/dependency-preflight.mts';
+import { playbookSectionFor } from '../playbooks/load-playbooks.mts';
 import { env } from '../env.mts';
 import { logger } from '../logger.mts';
 import { isAbsolute, relative, resolve } from 'node:path';
@@ -108,6 +109,7 @@ export async function runReviewer(params: ReviewerParams): Promise<ReviewDecisio
   // Pre-load the files the worker created so the reviewer doesn't need tools
   const fileContents = await loadReviewFiles(changedFiles, workerOutput, workingDirectory);
   const dependencySummary = summarizeForPrompt(getDependencyReport(workingDirectory));
+  const playbooks = await playbookSectionFor(workingDirectory, task.domain);
 
   const systemPrompt = buildReviewerPrompt(
     task,
@@ -115,6 +117,7 @@ export async function runReviewer(params: ReviewerParams): Promise<ReviewDecisio
     featureName,
     fileContents,
     dependencySummary,
+    playbooks,
   );
 
   const userPrompt =
